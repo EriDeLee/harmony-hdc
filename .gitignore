@@ -1,0 +1,48 @@
+# HarmonyOS / DevEco generated files
+.hvigor/
+**/build/
+**/.preview/
+**/.cxx/
+oh_modules/
+**/oh_modules/
+
+# Local machine configuration
+local.properties
+
+# Build artifacts
+*.hap
+*.app
+*.hsp
+*.har
+
+# Signing materials and local environment files
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.key
+*.pem
+*.csr
+*.cer
+*.p7b
+*.der
+
+# IDE / editor
+.idea/
+.deveco/
+.fleet/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# OS / logs / temporary files
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo

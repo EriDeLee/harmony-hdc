@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "entry_desc",
+      "value": "HDC 无线调试工具箱"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "HDC 无线调试工具箱"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "HDC Toolbox"
+    }
+  ]
+}
