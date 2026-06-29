@@ -144,5 +144,9 @@ export function base64ToBytes(text: string): Uint8Array {
 
 /** 十六进制（小写）用于日志。 */
 export function bytesToHex(data: Uint8Array): string {
-  return buffer.from(data.buffer, data.byteOffset, data.byteLength).toString('hex');
+  try {
+    return buffer.from(data.buffer, data.byteOffset, data.byteLength).toString('hex');
+  } catch (err) {
+    throw new Error(`字节转 hex 失败: ${(err as Error).message}`);
+  }
 }

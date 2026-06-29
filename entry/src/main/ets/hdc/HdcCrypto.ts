@@ -5,6 +5,7 @@
  * - 对 token 做 RSA-PSS / SHA512 / saltlen=digest 签名，输出 base64
  */
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
+import { BusinessError } from '@kit.BasicServicesKit';
 import { bytesToBase64 } from './Bytes';
 
 /** 把 DER 字节封装成 PEM 文本。 */
@@ -46,17 +47,26 @@ function requirePem(pem: string | undefined | null, label: string): string {
 // 公钥用最稳定的 getEncoded()（默认返回 X509 SubjectPublicKeyInfo DER）+ 手动 PEM 封装。
 // getEncodedPem('X509') 在部分设备返回空、getEncodedDer('X509') 在部分设备抛错，故都不用。
 function encodePublicPem(pubKey: cryptoFramework.PubKey): string {
-  const der = pubKey.getEncoded();
+  let der: cryptoFramework.DataBlob;
+  try {
+    der = pubKey.getEncoded();
+  } catch (err) {
+    throw new Error(`导出公钥 DER 失败: ${(err as BusinessError).message}`);
+  }
   return wrapPem('PUBLIC KEY', der.data);
 }
 
 /** 新生成一对 RSA-3072 密钥。 */
 export async function generateKeyPair(): Promise<HdcKeyPair> {
-  const generator = cryptoFramework.createAsyKeyGenerator(RSA_ALG);
-  const keyPair = await generator.generateKeyPair();
-  const privatePem = requirePem(keyPair.priKey.getEncodedPem('PKCS8'), '私钥');
-  const publicPem = requirePem(encodePublicPem(keyPair.pubKey), '公钥');
-  return new HdcKeyPair(keyPair, privatePem, publicPem);
+  try {
+    const generator = cryptoFramework.createAsyKeyGenerator(RSA_ALG);
+    const keyPair = await generator.generateKeyPair();
+    const privatePem = requirePem(keyPair.priKey.getEncodedPem('PKCS8'), '私钥');
+    const publicPem = requirePem(encodePublicPem(keyPair.pubKey), '公钥');
+    return new HdcKeyPair(keyPair, privatePem, publicPem);
+  } catch (err) {
+    throw new Error(`生成 RSA-3072 密钥对失败: ${(err as BusinessError).message}`);
+  }
 }
 
 /**
@@ -64,17 +74,25 @@ export async function generateKeyPair(): Promise<HdcKeyPair> {
  * 注意：cryptoFramework.convertPemKey 不会从私钥派生公钥，必须同时提供公钥 PEM。
  */
 export async function importPemPair(privatePem: string, publicPem: string): Promise<HdcKeyPair> {
-  const generator = cryptoFramework.createAsyKeyGenerator(RSA_ALG);
-  const keyPair = await generator.convertPemKey(publicPem, privatePem);
-  return new HdcKeyPair(keyPair, privatePem, publicPem);
+  try {
+    const generator = cryptoFramework.createAsyKeyGenerator(RSA_ALG);
+    const keyPair = await generator.convertPemKey(publicPem, privatePem);
+    return new HdcKeyPair(keyPair, privatePem, publicPem);
+  } catch (err) {
+    throw new Error(`从 PEM 恢复密钥对失败: ${(err as BusinessError).message}`);
+  }
 }
 
 /** 对 token 做 RSA-PSS/SHA512 签名，返回 base64 字符串对应的字节。 */
 export async function signToken(keyPair: HdcKeyPair, token: Uint8Array): Promise<string> {
-  const sign = cryptoFramework.createSign(SIGN_ALG);
-  await sign.init(keyPair.keyPair.priKey);
-  sign.setSignSpec(cryptoFramework.SignSpecItem.PSS_SALT_LEN_NUM, PSS_SALT_LEN);
-  const tokenBlob: cryptoFramework.DataBlob = { data: token };
-  const result = await sign.sign(tokenBlob);
-  return bytesToBase64(result.data);
+  try {
+    const sign = cryptoFramework.createSign(SIGN_ALG);
+    await sign.init(keyPair.keyPair.priKey);
+    sign.setSignSpec(cryptoFramework.SignSpecItem.PSS_SALT_LEN_NUM, PSS_SALT_LEN);
+    const tokenBlob: cryptoFramework.DataBlob = { data: token };
+    const result = await sign.sign(tokenBlob);
+    return bytesToBase64(result.data);
+  } catch (err) {
+    throw new Error(`token 签名失败: ${(err as BusinessError).message}`);
+  }
 }

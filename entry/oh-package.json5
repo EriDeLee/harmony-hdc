@@ -5,7 +5,5 @@
   "main": "",
   "author": "lee",
   "license": "Apache-2.0",
-  "dependencies": {
-    "@ohos/hypium": "1.0.25"
-  }
+  "dependencies": {}
 }
