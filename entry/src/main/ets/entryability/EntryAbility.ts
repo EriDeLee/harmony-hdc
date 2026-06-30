@@ -1,5 +1,6 @@
-import { UIAbility, AbilityConstant, Want } from '@kit.AbilityKit';
-import { window } from '@kit.ArkUI';
+import { UIAbility } from '@kit.AbilityKit';
+import type { AbilityConstant, Want } from '@kit.AbilityKit';
+import type { window } from '@kit.ArkUI';
 
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {}

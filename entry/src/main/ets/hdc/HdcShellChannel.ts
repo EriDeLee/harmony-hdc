@@ -10,7 +10,8 @@
  */
 import { util } from '@kit.ArkTS';
 import { utf8ToBytes } from './Bytes';
-import { CMD_KERNEL_CHANNEL_CLOSE, CMD_SHELL_DATA, CMD_SHELL_INIT, HdcFrame } from './HdcTypes';
+import { CMD_KERNEL_CHANNEL_CLOSE, CMD_SHELL_DATA, CMD_SHELL_INIT } from './HdcTypes';
+import type { HdcFrame } from './HdcTypes';
 
 export type ShellOutputSink = (text: string) => void;
 export type ShellSender = (payload: Uint8Array, commandFlag: number, channelId: number) => Promise<void>;

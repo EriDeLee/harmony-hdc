@@ -10,8 +10,13 @@
         "runtimeOS": "HarmonyOS",
         "buildOption": {
           "strictMode": {
+            "noExternalImportByPath": true,
+            "useNormalizedOHMUrl": true,
             "caseSensitiveCheck": true,
-            "useNormalizedOHMUrl": true
+            "duplicateDependencyCheck": true,
+            "harLocalDependencyCheck": true,
+            "enableStrictCheckOHModule": true,
+            "strictCheckerOnly": true
           }
         }
       }

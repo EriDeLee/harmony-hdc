@@ -5,7 +5,7 @@
  * - 对 token 做 RSA-PSS / SHA512 / saltlen=digest 签名，输出 base64
  */
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
-import { BusinessError } from '@kit.BasicServicesKit';
+import type { BusinessError } from '@kit.BasicServicesKit';
 import { bytesToBase64 } from './Bytes';
 
 /** 把 DER 字节封装成 PEM 文本。 */

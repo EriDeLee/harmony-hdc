@@ -6,12 +6,11 @@ import { ByteReader, ByteWriter, bytesToUtf8, concatBytes, utf8ToBytes } from '.
 import {
   CMD_KERNEL_HANDSHAKE,
   HANDSHAKE_BANNER,
-  HandShake,
-  HdcFrame,
   PACKET_FLAG,
   PAYLOAD_VCODE,
   PROTOCOL_VER
 } from './HdcTypes';
+import type { HandShake, HdcFrame } from './HdcTypes';
 
 const PACKET_FLAG_BYTES: Uint8Array = utf8ToBytes(PACKET_FLAG);
 
@@ -215,7 +214,7 @@ export function tryParseFrame(data: Uint8Array): ParseFrameResult | null {
     throw new Error(`非法 HDC 帧头: ${data[0]},${data[1]}`);
   }
   const reader = new ByteReader(data);
-  reader.readBytes(4); // flag(2) + reserve(2)
+  reader.readBytes(4);
   const protocolVer = reader.readByte();
   const protectSize = reader.readUint16BE();
   const dataSize = reader.readUint32BE();
@@ -230,7 +229,13 @@ export function tryParseFrame(data: Uint8Array): ParseFrameResult | null {
   const cmdRaw = protectFields.get(2);
   const channelId = typeof channelRaw === 'number' ? channelRaw : 0;
   const commandFlag = typeof cmdRaw === 'number' ? cmdRaw : 0;
-  const frame: HdcFrame = { protocolVer, protectFields, channelId, commandFlag, payload };
+  const frame: HdcFrame = {
+    protocolVer,
+    protectFields,
+    channelId,
+    commandFlag,
+    payload
+  };
   return { frame, consumed: total };
 }
 
@@ -244,7 +249,14 @@ export function parseHandShake(payload: Uint8Array): HandShake {
   const bufRaw = fields.get(5);
   const buf = bufRaw instanceof Uint8Array ? bufRaw : new Uint8Array(0);
   const version = fieldToString(fields.get(6));
-  return { banner, authType, sessionId, connectKey, buf, version };
+  return {
+    banner,
+    authType,
+    sessionId,
+    connectKey,
+    buf,
+    version
+  };
 }
 
 function fieldToString(value: number | Uint8Array | undefined): string {

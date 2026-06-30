@@ -1,6 +1,10 @@
 {
   "modelVersion": "6.1.1",
   "description": "HDC Toolbox - HarmonyOS 无线调试工具箱",
+  "scripts": {
+    "build": "hvigorw PackageApp -p product=default --no-daemon",
+    "lint": "codelinter -c code-linter.json5 -p default --exit-on error ."
+  },
   "dependencies": {
   },
   "devDependencies": {

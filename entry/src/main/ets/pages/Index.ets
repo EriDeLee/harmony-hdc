@@ -215,7 +215,7 @@ struct Index {
   @Builder
   fieldRow(label: string, value: string, onChange: (v: string) => void, enabled: boolean, inputType: InputType) {
     Row() {
-      Text(label).fontSize(13).width(72).fontColor('#8E8E93');
+      Text(label).fontSize(13).width(72).fontColor($r('app.color.text_secondary'));
       TextInput({ text: value })
         .fontSize(13)
         .layoutWeight(1)
@@ -232,11 +232,12 @@ struct Index {
       Text('HDC Toolbox')
         .fontSize(22)
         .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.text_primary'))
         .width('100%')
         .margin({ bottom: 4 });
       Text(`${this.status} · ${this.keyState}`)
         .fontSize(12)
-        .fontColor('#8E8E93')
+        .fontColor($r('app.color.text_secondary'))
         .width('100%')
         .margin({ bottom: 12 });
 
@@ -275,13 +276,13 @@ struct Index {
         Text(this.outputText.length > 0 ? this.outputText : '（shell 输出）')
           .fontSize(12)
           .fontFamily('monospace')
-          .fontColor('#E0E0E0')
+          .fontColor($r('app.color.terminal_text'))
           .width('100%')
           .textAlign(TextAlign.Start);
       }
       .layoutWeight(2)
       .width('100%')
-      .backgroundColor('#1C1C1E')
+      .backgroundColor($r('app.color.terminal_background'))
       .borderRadius(8)
       .padding(8)
       .align(Alignment.TopStart);
@@ -320,6 +321,7 @@ struct Index {
             Text(line)
               .fontSize(10)
               .fontFamily('monospace')
+              .fontColor($r('app.color.text_primary'))
               .width('100%')
               .textAlign(TextAlign.Start);
           }, (line: string, index: number) => `${index}:${line}`);
@@ -329,7 +331,7 @@ struct Index {
       }
       .layoutWeight(1)
       .width('100%')
-      .backgroundColor('#F2F2F7')
+      .backgroundColor($r('app.color.log_background'))
       // 顶角小、底角略大且柔和，不再尖，也不过分
       .borderRadius({ topLeft: 12, topRight: 12, bottomLeft: 18, bottomRight: 18 })
       .padding(10)
@@ -339,6 +341,6 @@ struct Index {
     .height('100%')
     // 四周留白；底部仅留 4（系统已自动避让手势区），贴近手势条上沿但不进入手势区
     .padding({ left: 16, right: 16, top: 16, bottom: 4 })
-    .backgroundColor(Color.White);
+    .backgroundColor($r('app.color.page_background'));
   }
 }

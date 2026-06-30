@@ -3,7 +3,7 @@
  * 认证成功（AUTH_OK 且非 DAEMON_UNAUTH）后，连接可用于后续命令信道。
  */
 import { socket } from '@kit.NetworkKit';
-import { BusinessError } from '@kit.BasicServicesKit';
+import type { BusinessError } from '@kit.BasicServicesKit';
 import {
   buildFrame,
   buildInitialBuf,
@@ -13,8 +13,10 @@ import {
   tryParseFrame
 } from './Protocol';
 import { bytesToUtf8, concatBytes, utf8ToBytes } from './Bytes';
-import { HdcKeyPair, signToken } from './HdcCrypto';
-import { HdcShellChannel, ShellOutputSink } from './HdcShellChannel';
+import { signToken } from './HdcCrypto';
+import type { HdcKeyPair } from './HdcCrypto';
+import { HdcShellChannel } from './HdcShellChannel';
+import type { ShellOutputSink } from './HdcShellChannel';
 import {
   AUTH_ENCRYPT,
   AUTH_NONE,
@@ -25,10 +27,9 @@ import {
   CMD_KERNEL_ECHO,
   CMD_KERNEL_ECHO_RAW,
   CMD_KERNEL_HANDSHAKE,
-  DEFAULT_VERSION,
-  HandShake,
-  HdcFrame
+  DEFAULT_VERSION
 } from './HdcTypes';
+import type { HandShake, HdcFrame } from './HdcTypes';
 
 export enum AuthResult {
   OK = 'OK',

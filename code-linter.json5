@@ -1,0 +1,23 @@
+{
+  "files": [
+    "**/*.ets",
+    "**/*.ts"
+  ],
+  "ignore": [
+    "**/build/**/*",
+    "**/oh_modules/**/*",
+    "**/.preview/**/*",
+    "**/.cxx/**/*",
+    ".hvigor/**/*"
+  ],
+  "ruleSet": [
+    "plugin:@typescript-eslint/recommended",
+    "plugin:@performance/recommended",
+    "plugin:@security/recommended",
+    "plugin:@correctness/recommended",
+    "plugin:@compatibility/recommended",
+    "plugin:@hw-stylistic/recommended"
+  ],
+  "rules": {},
+  "overrides": []
+}

@@ -2,8 +2,8 @@
  * 连接配置持久化（仅保存最近一次成功连接的 host/port，无历史，直接覆写）。
  */
 import { preferences } from '@kit.ArkData';
-import { common } from '@kit.AbilityKit';
-import { BusinessError } from '@kit.BasicServicesKit';
+import type { common } from '@kit.AbilityKit';
+import type { BusinessError } from '@kit.BasicServicesKit';
 
 const STORE_NAME: string = 'hdc_settings';
 const KEY_HOST: string = 'last_host';

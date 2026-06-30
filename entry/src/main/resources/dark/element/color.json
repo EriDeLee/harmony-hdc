@@ -2,15 +2,15 @@
   "color": [
     {
       "name": "start_window_background",
-      "value": "#FFFFFF"
+      "value": "#000000"
     },
     {
       "name": "page_background",
-      "value": "#FFFFFF"
+      "value": "#000000"
     },
     {
       "name": "text_primary",
-      "value": "#000000"
+      "value": "#FFFFFF"
     },
     {
       "name": "text_secondary",
@@ -18,7 +18,7 @@
     },
     {
       "name": "terminal_background",
-      "value": "#1C1C1E"
+      "value": "#000000"
     },
     {
       "name": "terminal_text",
@@ -26,7 +26,7 @@
     },
     {
       "name": "log_background",
-      "value": "#F2F2F7"
+      "value": "#1C1C1E"
     }
   ]
 }

@@ -3,9 +3,10 @@
  * 注意：这是本地调试工具，私钥以 PEM 存于应用沙箱 Preferences。
  */
 import { preferences } from '@kit.ArkData';
-import { common } from '@kit.AbilityKit';
-import { BusinessError } from '@kit.BasicServicesKit';
-import { HdcKeyPair, importPemPair } from './HdcCrypto';
+import type { common } from '@kit.AbilityKit';
+import type { BusinessError } from '@kit.BasicServicesKit';
+import { importPemPair } from './HdcCrypto';
+import type { HdcKeyPair } from './HdcCrypto';
 
 const STORE_NAME: string = 'hdc_keys';
 const KEY_PRIVATE: string = 'private_pem';
