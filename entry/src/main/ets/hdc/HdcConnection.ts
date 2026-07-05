@@ -17,6 +17,7 @@ import { signToken } from './HdcCrypto';
 import type { HdcKeyPair } from './HdcCrypto';
 import { HdcShellChannel } from './HdcShellChannel';
 import type { ShellOutputSink } from './HdcShellChannel';
+import { HdcUnityCommandChannel } from './HdcUnityCommandChannel';
 import {
   AUTH_ENCRYPT,
   AUTH_NONE,
@@ -75,6 +76,8 @@ export class HdcConnection {
   private closed: boolean = false;
   private nextChannelId: number = 1;
   private readonly shellChannels: Map<number, HdcShellChannel> = new Map<number, HdcShellChannel>();
+  private readonly unityChannels: Map<number, HdcUnityCommandChannel> = new Map<number, HdcUnityCommandChannel>();
+  private readonly expiredUnityChannels: Set<number> = new Set<number>();
   private readonly loggedUnroutedCmds: Set<number> = new Set<number>();
 
   private readonly log: LogSink;
@@ -103,6 +106,26 @@ export class HdcConnection {
     return channel;
   }
 
+  /** 执行一次性 shell 命令（CMD_UNITY_EXECUTE），与交互式 shell 隔离。 */
+  async executeCommand(command: string, timeoutMs: number = 30000): Promise<string> {
+    const channelId = this.nextChannelId;
+    this.nextChannelId += 1;
+    const channel = new HdcUnityCommandChannel(
+      channelId,
+      (payload: Uint8Array, commandFlag: number, ch: number) => this.send(payload, commandFlag, ch),
+      (ch: number, waitForClose: boolean) => {
+        this.unityChannels.delete(ch);
+        if (waitForClose) {
+          this.expiredUnityChannels.add(ch);
+        } else {
+          this.expiredUnityChannels.delete(ch);
+        }
+      }
+    );
+    this.unityChannels.set(channelId, channel);
+    return channel.execute(command, timeoutMs);
+  }
+
   getSessionId(): number {
     return this.sessionId;
   }
@@ -123,11 +146,13 @@ export class HdcConnection {
     tcp.on('close', () => {
       this.closed = true;
       this.failWaiter(new Error('连接已关闭'));
+      this.failUnityChannels(new Error('连接已关闭'));
     });
     tcp.on('error', (err: BusinessError) => {
       this.closed = true;
       this.log(`[socket] error code=${err.code} msg=${err.message}`);
       this.failWaiter(new Error(`socket 错误 ${err.code}`));
+      this.failUnityChannels(new Error(`socket 错误 ${err.code}`));
     });
 
     const address: socket.NetAddress = { address: options.host, port: options.port };
@@ -224,6 +249,8 @@ export class HdcConnection {
 
   async close(): Promise<void> {
     this.closed = true;
+    this.failUnityChannels(new Error('连接已关闭'));
+    this.expiredUnityChannels.clear();
     if (this.tcp !== null) {
       try {
         await this.tcp.close();
@@ -269,15 +296,34 @@ export class HdcConnection {
       }
       return;
     }
-    // shell 输出：按 channelId 路由；不匹配时回退到当前唯一 shell
+    // shell 输出：按 channelId 路由；不匹配时仅在“唯一 shell”情况下回退。
+    // 多 shell 时盲目丢给第一个 channel 会导致工具命令输出被主终端吞掉。
     if (frame.commandFlag === CMD_KERNEL_ECHO_RAW || frame.commandFlag === CMD_KERNEL_ECHO) {
-      const channel = this.shellChannels.get(frame.channelId) ?? this.firstShellChannel();
+      const unityChannel = this.unityChannels.get(frame.channelId);
+      if (unityChannel !== undefined) {
+        unityChannel.handleEchoRaw(frame);
+        return;
+      }
+      if (this.expiredUnityChannels.has(frame.channelId)) {
+        return;
+      }
+      const channel = this.shellChannels.get(frame.channelId) ??
+        (frame.channelId === 0 ? this.singleShellChannel() : undefined);
       if (channel !== undefined) {
         channel.handleEchoRaw(frame);
         return;
       }
     }
     if (frame.commandFlag === CMD_KERNEL_CHANNEL_CLOSE) {
+      const unityChannel = this.unityChannels.get(frame.channelId);
+      if (unityChannel !== undefined) {
+        unityChannel.handleClose();
+        return;
+      }
+      if (this.expiredUnityChannels.delete(frame.channelId)) {
+        this.log(`[unity] channel ${frame.channelId} closed after timeout`);
+        return;
+      }
       this.shellChannels.delete(frame.channelId);
       this.log(`[shell] channel ${frame.channelId} closed by daemon`);
       return;
@@ -293,7 +339,10 @@ export class HdcConnection {
     }
   }
 
-  private firstShellChannel(): HdcShellChannel | undefined {
+  private singleShellChannel(): HdcShellChannel | undefined {
+    if (this.shellChannels.size !== 1) {
+      return undefined;
+    }
     for (const channel of this.shellChannels.values()) {
       return channel;
     }
@@ -330,6 +379,16 @@ export class HdcConnection {
       this.waiter = null;
       this.waiterReject = null;
       reject(err);
+    }
+  }
+
+  private failUnityChannels(err: Error): void {
+    const channels: HdcUnityCommandChannel[] = [];
+    this.unityChannels.forEach((channel: HdcUnityCommandChannel) => {
+      channels.push(channel);
+    });
+    for (const channel of channels) {
+      channel.fail(err);
     }
   }
 

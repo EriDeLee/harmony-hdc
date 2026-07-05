@@ -8,10 +8,16 @@ import type { BusinessError } from '@kit.BasicServicesKit';
 const STORE_NAME: string = 'hdc_settings';
 const KEY_HOST: string = 'last_host';
 const KEY_PORT: string = 'last_port';
+const KEY_BUNDLE_SYS: string = 'bundle_system_map';
 
 export interface ConnectionConfig {
   host: string;
   port: number;
+}
+
+interface CacheRow {
+  n: string;
+  s: boolean;
 }
 
 async function getStore(context: common.Context): Promise<preferences.Preferences> {
@@ -53,4 +59,38 @@ export async function loadConnection(context: common.Context): Promise<Connectio
     return null;
   }
   return { host, port };
+}
+
+/** 读取“包名→是否系统应用”的分类缓存；无记录返回空 Map。 */
+export async function loadBundleSystemMap(context: common.Context): Promise<Map<string, boolean>> {
+  const map = new Map<string, boolean>();
+  try {
+    const store = await getStore(context);
+    const text = await store.get(KEY_BUNDLE_SYS, '') as string;
+    if (text.length === 0) {
+      return map;
+    }
+    const rows = JSON.parse(text) as CacheRow[];
+    for (const row of rows) {
+      map.set(row.n, row.s);
+    }
+  } catch (err) {
+    // 缓存损坏时返回空，重新分类即可
+  }
+  return map;
+}
+
+/** 持久化“包名→是否系统应用”的分类缓存（覆写）。 */
+export async function saveBundleSystemMap(context: common.Context, map: Map<string, boolean>): Promise<void> {
+  const rows: CacheRow[] = [];
+  map.forEach((value: boolean, key: string) => {
+    rows.push({ n: key, s: value });
+  });
+  try {
+    const store = await getStore(context);
+    await store.put(KEY_BUNDLE_SYS, JSON.stringify(rows));
+    await store.flush();
+  } catch (err) {
+    throw new Error(`保存应用分类缓存失败: ${(err as BusinessError).message}`);
+  }
 }
