@@ -5,6 +5,7 @@
   ],
   "ignore": [
     "**/build/**/*",
+    "**/node_modules/**/*",
     "**/oh_modules/**/*",
     "**/.preview/**/*",
     "**/.cxx/**/*",
@@ -17,7 +18,5 @@
     "plugin:@correctness/recommended",
     "plugin:@compatibility/recommended",
     "plugin:@hw-stylistic/recommended"
-  ],
-  "rules": {},
-  "overrides": []
+  ]
 }

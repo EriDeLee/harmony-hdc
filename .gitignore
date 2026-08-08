@@ -1,5 +1,6 @@
 # HarmonyOS / DevEco generated files
 .hvigor/
+node_modules/
 **/build/
 **/.preview/
 **/.cxx/
@@ -46,3 +47,6 @@ Thumbs.db
 *.temp
 *.swp
 *.swo
+
+scripts/
+/AGENTS.md

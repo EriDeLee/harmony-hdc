@@ -1,7 +1,4 @@
 {
-  "modelVersion": "6.1.1",
-  "dependencies": {
-  },
-  "execution": {
-  }
+  "modelVersion": "6.1.0",
+  "dependencies": {}
 }
