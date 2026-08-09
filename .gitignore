@@ -19,6 +19,7 @@ local.properties
 # Signing materials and local environment files
 .env
 .env.*
+*.env
 !.env.example
 *.p12
 *.pfx
