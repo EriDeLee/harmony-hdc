@@ -49,6 +49,15 @@ export interface ConnectOptions {
   timeoutMs: number;
 }
 
+/**
+ * 一条正在飞的一次性命令。
+ * `channelId` 用来在中途掐掉它（见 `abortCommand`），`result` 是命令的结果。
+ */
+export interface PendingCommand {
+  channelId: number;
+  result: Promise<string>;
+}
+
 export interface AuthOutcome {
   result: AuthResult;
   message: string;
@@ -106,8 +115,16 @@ export class HdcConnection {
     return channel;
   }
 
-  /** 执行一次性 shell 命令（CMD_UNITY_EXECUTE），与交互式 shell 隔离。 */
-  async executeCommand(command: string, timeoutMs: number = 30000): Promise<string> {
+  /**
+   * 发一条一次性 shell 命令，并把**通道号**交出来。
+   *
+   * 存在的理由：调用方需要能在中途掐掉这条命令。`executeCommand` 只返回结果，
+   * 拿不到通道号，于是一旦命令飞出去就只能等设备回包或等超时 ——
+   * 用户按「停止」最坏要等满整个超时才落地。
+   *
+   * 只有需要这种能力的调用方才用它（目前是 agent 的动作）。其余照用 executeCommand。
+   */
+  startCommand(command: string, timeoutMs: number = 30000): PendingCommand {
     const channelId = this.nextChannelId;
     this.nextChannelId += 1;
     const channel = new HdcUnityCommandChannel(
@@ -123,7 +140,32 @@ export class HdcConnection {
       }
     );
     this.unityChannels.set(channelId, channel);
-    return channel.execute(command, timeoutMs);
+    return { channelId, result: channel.execute(command, timeoutMs) };
+  }
+
+  /** 执行一次性 shell 命令（CMD_UNITY_EXECUTE），与交互式 shell 隔离。 */
+  async executeCommand(command: string, timeoutMs: number = 30000): Promise<string> {
+    return await this.startCommand(command, timeoutMs).result;
+  }
+
+  /**
+   * 掐掉一条在飞的命令：拒掉它的 promise 并清掉它的超时定时器。
+   *
+   * **只影响这一个通道。** 一条命令一个通道，所以终端页、电源页、屏幕看守各自的
+   * 命令都不受影响 —— 中断是 agent 这个任务的事，不该把别处的命令一起掐掉。
+   *
+   * 命令已经结束时是空操作（通道里有 settled 保护），所以调用方不必先判断状态。
+   *
+   * 注意：掐掉的是**我们的等待**，不是**设备上的动作**。已经发出去的滑动、按键
+   * 在手机上该走完还是会走完。
+   */
+  abortCommand(channelId: number, reason: string): boolean {
+    const channel = this.unityChannels.get(channelId);
+    if (channel === undefined) {
+      return false;
+    }
+    channel.fail(new Error(reason));
+    return true;
   }
 
   getSessionId(): number {
