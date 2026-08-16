@@ -122,8 +122,17 @@ const AGENT_PULL_HINT_VP: number = 12;
 // 它和被删的那套的根本区别是**不判断，也不放弃**。经过见 `doc/agent-session-ui.md`。
 /** 键盘弹起时输入行与键盘之间留多少。收起时不用这个值，见输入行处的注释。 */
 const AGENT_INPUT_GAP_ON_KEYBOARD_VP: number = 10;
-/** 任务输入框的字号。量行高要用同一个值，所以提成常量。 */
-const AGENT_INPUT_FONT_SIZE: number = 14;
+/**
+ * 输入框的字号，取系统正文档 `body1`。
+ *
+ * 全应用的字号都挂在系统 token 上，不写数字：同一个 token 在不同设备与不同字体缩放下
+ * 解析成不同的值（本机资源里 `body1` 在手机配置是 16fp、在另一种配置是 18fp），
+ * 写死数字在后一种配置上就是错的。
+ *
+ * 挑 `body1` 的第二个原因：输入框的**灰字**默认用的就是它。真实值挂同一个 token
+ * 之后，两者再也不可能一大一小 —— 那正是把它们分开写的老毛病。
+ */
+const INPUT_FONT_SIZE: Resource = $r('sys.float.ohos_id_text_size_body1');
 /**
  * 任务输入框最多显示几行，超过就在框内自己滚。
  * 不封顶的话一段长描述能把输入行顶到半屏高，把时间线挤没。
@@ -614,7 +623,7 @@ struct Index {
       const ctx = this.getUIContext();
       const size: SizeOptions = ctx.getMeasureUtils().measureTextSize({
         textContent: '四',
-        fontSize: AGENT_INPUT_FONT_SIZE
+        fontSize: INPUT_FONT_SIZE
       });
       // 返回值官方注明单位是 px，类型是 Length（可能是数字也可能是带单位的串），
       // 所以照本文件处理 `Area.height` 的同一套办法解析。
@@ -2934,9 +2943,9 @@ struct Index {
   @Builder
   fieldRow(label: string, value: string, onChange: (v: string) => void, enabled: boolean, inputType: InputType) {
     Row() {
-      Text(label).fontSize(13).width(72).fontColor($r('app.color.text_secondary'));
+      Text(label).fontSize($r('sys.float.ohos_id_text_size_body2')).width(72).fontColor($r('app.color.text_secondary'));
       TextInput({ text: value })
-        .fontSize(13)
+        .fontSize(INPUT_FONT_SIZE)
         .layoutWeight(1)
         .enabled(enabled)
         .type(inputType)
@@ -2982,7 +2991,7 @@ struct Index {
     Column() {
       Scroll(this.terminalScroller) {
         Text(this.outputText.length > 0 ? this.outputText : '（shell 输出）')
-          .fontSize(12)
+          .fontSize($r('sys.float.ohos_id_text_size_body3'))
           .fontFamily('monospace')
           .fontColor($r('app.color.terminal_text'))
           .width('100%')
@@ -3016,7 +3025,8 @@ struct Index {
       Row() {
         // 已知问题：命令输入框无法关闭输入法自动大写（实测多种方案均无效）。
         TextInput({ text: this.command, placeholder: '输入 shell 命令' })
-          .fontSize(13)
+          .fontSize(INPUT_FONT_SIZE)
+          .placeholderFont({ size: INPUT_FONT_SIZE })
           .fontFamily('monospace')
           .fontColor($r('app.color.terminal_text'))
           .placeholderColor('#8E8E93')
@@ -3055,7 +3065,7 @@ struct Index {
       Column() {
         ForEach(this.logs, (line: string, index: number) => {
           Text(line)
-            .fontSize(10)
+            .fontSize($r('sys.float.ohos_id_text_size_caption1'))
             .fontFamily('monospace')
             .fontColor($r('app.color.text_primary'))
             .width('100%')
@@ -3073,17 +3083,26 @@ struct Index {
     .align(Alignment.TopStart);
   }
 
+  // 下面四行右端那个 `›` 的 22fp 是**故意写死的**，不是漏改。
+  //
+  // 全应用其他字号都挂在系统 token 上，但这个 `›` 不是文字，是拿字形当图标用的箭头 ——
+  // 22 是按「压得住左边标题加副标题两行」的视觉重量挑的，它没有对应的文字角色，
+  // 挂 body/sub_title 哪一档都是错配。系统文字档最大也只到 20fp（dialog_tittle），
+  // 够不到 22。
+  //
+  // 唯一"正确"的挂法是换成系统图标（SymbolGlyph + ohos_id_arrow_height_width），
+  // 但那会把箭头形状换成系统标准那个，四行的观感一起变。用户选择保持现状。
   @Builder
   featureList() {
     Column() {
       Row() {
         Column() {
           Text('终端')
-            .fontSize(16)
+            .fontSize($r('sys.float.ohos_id_text_size_sub_title2'))
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'));
           Text('全屏使用交互式 shell')
-            .fontSize(12)
+            .fontSize($r('sys.float.ohos_id_text_size_body3'))
             .fontColor($r('app.color.text_secondary'))
             .margin({ top: 2 });
         }
@@ -3102,11 +3121,11 @@ struct Index {
       Row() {
         Column() {
           Text('清空应用数据')
-            .fontSize(16)
+            .fontSize($r('sys.float.ohos_id_text_size_sub_title2'))
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'));
           Text('多选应用，通过 bm 清除其数据')
-            .fontSize(12)
+            .fontSize($r('sys.float.ohos_id_text_size_body3'))
             .fontColor($r('app.color.text_secondary'))
             .margin({ top: 2 });
         }
@@ -3126,11 +3145,11 @@ struct Index {
       Row() {
         Column() {
           Text('电源控制')
-            .fontSize(16)
+            .fontSize($r('sys.float.ohos_id_text_size_sub_title2'))
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'));
           Text('熄屏、电源挡位与屏幕超时')
-            .fontSize(12)
+            .fontSize($r('sys.float.ohos_id_text_size_body3'))
             .fontColor($r('app.color.text_secondary'))
             .margin({ top: 2 });
         }
@@ -3150,13 +3169,13 @@ struct Index {
       Row() {
         Column() {
           Text('AGENT 操控')
-            .fontSize(16)
+            .fontSize($r('sys.float.ohos_id_text_size_sub_title2'))
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'));
           Text(this.agentRunning ?
             `正在执行 · 计划 ${this.agentTodoSummary}` :
             '用一句话让模型自己操作这台手机')
-            .fontSize(12)
+            .fontSize($r('sys.float.ohos_id_text_size_body3'))
             .fontColor($r('app.color.text_secondary'))
             .margin({ top: 2 });
         }
@@ -3182,12 +3201,12 @@ struct Index {
   powerSection(title: string, subtitle: string) {
     Column() {
       Text(title)
-        .fontSize(17)
+        .fontSize($r('sys.float.ohos_id_text_size_sub_title2'))
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'))
         .width('100%');
       Text(subtitle)
-        .fontSize(12)
+        .fontSize($r('sys.float.ohos_id_text_size_body3'))
         .fontColor($r('app.color.text_secondary'))
         .width('100%')
         .margin({ top: 4 });
@@ -3201,11 +3220,11 @@ struct Index {
   powerModeTick(option: PowerModeOption) {
     Column() {
       Text(`${option.value}`)
-        .fontSize(12)
+        .fontSize($r('sys.float.ohos_id_text_size_body3'))
         .fontWeight(this.pendingPowerMode === option.value ? FontWeight.Bold : FontWeight.Regular)
         .fontColor(this.pendingPowerMode === option.value ? $r('sys.color.ohos_id_color_emphasize') : $r('app.color.text_secondary'));
       Text(option.title)
-        .fontSize(10)
+        .fontSize($r('sys.float.ohos_id_text_size_caption1'))
         .fontColor(this.pendingPowerMode === option.value ? $r('sys.color.ohos_id_color_emphasize') : $r('app.color.text_secondary'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -3221,7 +3240,7 @@ struct Index {
   timeoutHourPickerColumn() {
     Column() {
       Text('小时')
-        .fontSize(13)
+        .fontSize($r('sys.float.ohos_id_text_size_body2'))
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_secondary'))
         .width('100%')
@@ -3261,7 +3280,7 @@ struct Index {
   timeoutMinutePickerColumn() {
     Column() {
       Text('分钟')
-        .fontSize(13)
+        .fontSize($r('sys.float.ohos_id_text_size_body2'))
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_secondary'))
         .width('100%')
@@ -3301,7 +3320,7 @@ struct Index {
   timeoutSecondPickerColumn() {
     Column() {
       Text('秒')
-        .fontSize(13)
+        .fontSize($r('sys.float.ohos_id_text_size_body2'))
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_secondary'))
         .width('100%')
@@ -3342,17 +3361,17 @@ struct Index {
     Column() {
       Row() {
         Text('‹ 返回')
-          .fontSize(16)
+          .fontSize($r('sys.float.ohos_id_text_size_body1'))
           .fontColor($r('app.color.text_primary'))
           .onClick(() => { this.closePowerPage(); });
         Text('电源控制')
-          .fontSize(17)
+          .fontSize($r('sys.float.ohos_id_text_size_sub_title1'))
           .fontWeight(FontWeight.Bold)
           .layoutWeight(1)
           .textAlign(TextAlign.Center)
           .fontColor($r('app.color.text_primary'));
         Text('返回')
-          .fontSize(16)
+          .fontSize($r('sys.float.ohos_id_text_size_body1'))
           .opacity(0);
       }
       .width('100%')
@@ -3368,7 +3387,7 @@ struct Index {
             // 以及 ThermalService / BatteryService / XpowerManager，全都没有该字段。
             // 这个值只是滑块上待应用的选择，默认停在 600，与系统实际状态无关。
             Text(`将切换到：${this.powerModeInfo(this.pendingPowerMode).title}（${this.pendingPowerMode}）`)
-              .fontSize(20)
+              .fontSize($r('sys.float.ohos_id_text_size_dialog_tittle'))
               .fontWeight(FontWeight.Bold)
               .fontColor($r('app.color.text_primary'))
               .width('100%')
@@ -3376,7 +3395,7 @@ struct Index {
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .margin({ bottom: 12 });
             Text(`将执行：power-shell setmode ${this.pendingPowerMode}`)
-              .fontSize(12)
+              .fontSize($r('sys.float.ohos_id_text_size_body3'))
               .fontColor($r('app.color.text_secondary'))
               .width('100%')
               .maxLines(1)
@@ -3434,13 +3453,13 @@ struct Index {
             .margin({ top: 12 });
 
             Text(this.timeoutSummary())
-              .fontSize(15)
+              .fontSize($r('sys.float.ohos_id_text_size_body2'))
               .fontWeight(FontWeight.Medium)
               .fontColor($r('app.color.text_primary'))
               .width('100%')
               .margin({ top: 14 });
             Text(`将执行：${this.timeoutCommandPreview()}`)
-              .fontSize(12)
+              .fontSize($r('sys.float.ohos_id_text_size_body3'))
               .fontFamily('monospace')
               .fontColor($r('app.color.text_secondary'))
               .width('100%')
@@ -3493,17 +3512,17 @@ struct Index {
     Column() {
       Row() {
         Text('‹ 返回')
-          .fontSize(16)
+          .fontSize($r('sys.float.ohos_id_text_size_body1'))
           .fontColor(Color.White)
           .onClick(() => { this.closeTerminalPage(); });
         Text('终端')
-          .fontSize(17)
+          .fontSize($r('sys.float.ohos_id_text_size_sub_title1'))
           .fontWeight(FontWeight.Bold)
           .layoutWeight(1)
           .textAlign(TextAlign.Center)
           .fontColor(Color.White);
         Text(this.connected ? '已连接' : '未连接')
-          .fontSize(12)
+          .fontSize($r('sys.float.ohos_id_text_size_body3'))
           .fontColor($r('app.color.terminal_text'));
       }
       .width('100%')
@@ -3554,7 +3573,7 @@ struct Index {
       if (this.itemsForPage(idx).length === 0) {
         ListItem() {
           Text('说一句要做什么，例如「打开备忘录，新建一条写上今天要买的东西」。')
-            .fontSize(13)
+            .fontSize($r('sys.float.ohos_id_text_size_body2'))
             .fontColor($r('app.color.text_secondary'))
             .width('100%')
             .padding(12);
@@ -3809,7 +3828,7 @@ struct Index {
   timelineRow(item: TimelineItem) {
     Column() {
       Text(this.timelinePrefix(item.kind))
-        .fontSize(11)
+        .fontSize($r('sys.float.ohos_id_text_size_caption1'))
         .fontWeight(FontWeight.Medium)
         .fontColor(this.timelineColor(item.kind));
       Text(item.text)
@@ -3833,12 +3852,12 @@ struct Index {
     Column() {
       Row() {
         Text('‹ 返回')
-          .fontSize(16)
+          .fontSize($r('sys.float.ohos_id_text_size_body1'))
           .fontColor($r('app.color.text_primary'))
           .onClick(() => { this.closeAgentPage(); });
         Column() {
           Text('AGENT 操控')
-            .fontSize(17)
+            .fontSize($r('sys.float.ohos_id_text_size_sub_title1'))
             .fontWeight(FontWeight.Bold)
             .fontColor($r('app.color.text_primary'));
           // 段号常显：会话位置以前只在历史模式下才看得见，
@@ -3848,7 +3867,7 @@ struct Index {
           // （未制定计划→2/5、未保活→保活方式名），换行会把整个标题栏顶高，
           // 运行过程中不停抖。宁可省略号截断，也不让布局跳。
           Text(this.agentStatusLine())
-            .fontSize(11)
+            .fontSize($r('sys.float.ohos_id_text_size_caption1'))
             .fontColor($r('app.color.text_secondary'))
             .margin({ top: 2 })
             .maxLines(1)
@@ -3860,13 +3879,13 @@ struct Index {
         .alignItems(HorizontalAlign.Center);
         if (this.agentHasHistory() && !this.agentRunning && this.viewingLatest()) {
           Text('新会话')
-            .fontSize(15)
+            .fontSize($r('sys.float.ohos_id_text_size_button2'))
             .fontColor($r('app.color.text_secondary'))
             .margin({ right: 12 })
             .onClick(() => { this.onNewAgentSession(); });
         }
         Text('设置')
-          .fontSize(15)
+          .fontSize($r('sys.float.ohos_id_text_size_button2'))
           .fontColor($r('sys.color.ohos_id_color_emphasize'))
           .onClick(() => { this.openAgentSettings(); });
       }
@@ -3881,7 +3900,7 @@ struct Index {
 
       if (this.agentUsageText.length > 0) {
         Text(this.agentUsageText)
-          .fontSize(11)
+          .fontSize($r('sys.float.ohos_id_text_size_caption1'))
           .fontFamily('monospace')
           .fontColor($r('app.color.text_secondary'))
           .width('100%')
@@ -3891,15 +3910,15 @@ struct Index {
       if (this.agentPauseReason.length > 0) {
         Row() {
           Text(this.agentPauseReason)
-            .fontSize(13)
+            .fontSize($r('sys.float.ohos_id_text_size_body2'))
             .fontColor('#FF9500')
             .layoutWeight(1);
           Button('继续')
-            .fontSize(13)
+            .fontSize($r('sys.float.ohos_id_text_size_button2'))
             .height(32)
             .onClick(() => { this.resolvePause(true); });
           Button('放弃')
-            .fontSize(13)
+            .fontSize($r('sys.float.ohos_id_text_size_button2'))
             .height(32)
             .backgroundColor('#FF3B30')
             .margin({ left: 8 })
@@ -3989,7 +4008,7 @@ struct Index {
 
         if (this.agentPullHint.length > 0) {
           Text(this.agentPullHint)
-            .fontSize(12)
+            .fontSize($r('sys.float.ohos_id_text_size_body3'))
             .fontColor($r('app.color.text_secondary'))
             .width('100%')
             .textAlign(TextAlign.Center)
@@ -4033,19 +4052,20 @@ struct Index {
           })
             .enabled(!this.agentRunning)
             .layoutWeight(1)
-            .fontSize(AGENT_INPUT_FONT_SIZE)
+            .fontSize(INPUT_FONT_SIZE)
+            .placeholderFont({ size: INPUT_FONT_SIZE })
             .minLines(1)
             .constraintSize({ maxHeight: this.agentInputMaxHeightVp });
           if (this.agentRunning) {
             Button('停止')
-              .fontSize(14)
+              .fontSize($r('sys.float.ohos_id_text_size_button2'))
               .height(40)
               .backgroundColor('#FF3B30')
               .margin({ left: 8 })
               .onClick(() => { this.onStopAgent(); });
           } else {
             Button(this.agentHasHistory() ? '发送' : '开始')
-              .fontSize(14)
+              .fontSize($r('sys.float.ohos_id_text_size_button2'))
               .height(40)
               .margin({ left: 8 })
               .onClick(() => { this.onSendAgent(); });
@@ -4070,7 +4090,7 @@ struct Index {
         // 既把话说全又直接可点。高度与内边距沿用输入行原值，所以翻页不会跳版。
         Row() {
           Button('回到最新以继续对话')
-            .fontSize(14)
+            .fontSize($r('sys.float.ohos_id_text_size_button2'))
             .height(40)
             .width('100%')
             .onClick(() => { this.jumpToLatest(); });
@@ -4097,13 +4117,13 @@ struct Index {
   settingField(label: string, hint: string) {
     Column() {
       Text(label)
-        .fontSize(13)
+        .fontSize($r('sys.float.ohos_id_text_size_body2'))
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'))
         .width('100%');
       if (hint.length > 0) {
         Text(hint)
-          .fontSize(11)
+          .fontSize($r('sys.float.ohos_id_text_size_caption1'))
           .fontColor($r('app.color.text_secondary'))
           .width('100%')
           .margin({ top: 2 });
@@ -4119,11 +4139,11 @@ struct Index {
     Column() {
       Row() {
         Text('‹ 返回')
-          .fontSize(16)
+          .fontSize($r('sys.float.ohos_id_text_size_body1'))
           .fontColor($r('app.color.text_primary'))
           .onClick(() => { this.closeAgentSettings(); });
         Text('模型设置')
-          .fontSize(17)
+          .fontSize($r('sys.float.ohos_id_text_size_sub_title1'))
           .fontWeight(FontWeight.Bold)
           .layoutWeight(1)
           .textAlign(TextAlign.Center)
@@ -4131,7 +4151,7 @@ struct Index {
         // 不再是「保存」按钮。改动自动落盘，这里只是把这件事说出来 ——
         // 有人改完直接按返回，以为没保存，或者压根没注意到右上角有个按钮。
         Text(this.cfgSaving ? '保存中' : '自动保存')
-          .fontSize(13)
+          .fontSize($r('sys.float.ohos_id_text_size_body2'))
           .fontColor($r('app.color.text_secondary'));
       }
       .width('100%')
@@ -4143,47 +4163,54 @@ struct Index {
           // 「例如」两个字不能省：只有一个地址时更容易被读成「只支持这一家」。
           this.settingField('接口地址', '例如 https://api.anthropic.com/');
           TextInput({ placeholder: 'https://api.anthropic.com/', text: $$this.cfgEndpoint })
-            .fontSize(13)
+            .fontSize(INPUT_FONT_SIZE)
+            .placeholderFont({ size: INPUT_FONT_SIZE })
             .width('100%')
             .onChange(() => { this.scheduleAgentConfigSave(); });
 
           this.settingField('API key', '明文存在应用沙箱里，只有本应用能读');
           TextInput({ placeholder: 'sk-…', text: $$this.cfgApiKey })
             .type(InputType.Password)
-            .fontSize(13)
+            .fontSize(INPUT_FONT_SIZE)
+            .placeholderFont({ size: INPUT_FONT_SIZE })
             .width('100%')
             .onChange(() => { this.scheduleAgentConfigSave(); });
 
           this.settingField('模型 ID', '手填，区分大小写。例如 claude-opus-5、kimi-k3');
           TextInput({ placeholder: 'claude-opus-5', text: $$this.cfgModel })
-            .fontSize(13)
+            .fontSize(INPUT_FONT_SIZE)
+            .placeholderFont({ size: INPUT_FONT_SIZE })
             .width('100%')
             .onChange(() => { this.scheduleAgentConfigSave(); });
 
           this.settingField('单次回复上限', '一次回答的长度上限，默认 32768');
           TextInput({ placeholder: '32768', text: $$this.cfgMaxTokens })
             .type(InputType.Number)
-            .fontSize(13)
+            .fontSize(INPUT_FONT_SIZE)
+            .placeholderFont({ size: INPUT_FONT_SIZE })
             .width('100%')
             .onChange(() => { this.scheduleAgentConfigSave(); });
 
           this.settingField('压缩阈值', '超过时执行上下文压缩，留空默认 128000，填 0 禁用压缩');
           TextInput({ placeholder: '128000', text: $$this.cfgContextLimit })
             .type(InputType.Number)
-            .fontSize(13)
+            .fontSize(INPUT_FONT_SIZE)
+            .placeholderFont({ size: INPUT_FONT_SIZE })
             .width('100%')
             .onChange(() => { this.scheduleAgentConfigSave(); });
 
           this.settingField('截图保留数', '历史里留最近几张截图，更早的换成一行文字。留空默认 5，填 0 全部保留');
           TextInput({ placeholder: '5', text: $$this.cfgKeepScreenshots })
             .type(InputType.Number)
-            .fontSize(13)
+            .fontSize(INPUT_FONT_SIZE)
+            .placeholderFont({ size: INPUT_FONT_SIZE })
             .width('100%')
             .onChange(() => { this.scheduleAgentConfigSave(); });
 
           this.settingField('禁止进入的应用', '一行一个包名，留空表示不限制');
           TextArea({ placeholder: 'com.example.app', text: $$this.cfgBlacklist })
-            .fontSize(13)
+            .fontSize(INPUT_FONT_SIZE)
+            .placeholderFont({ size: INPUT_FONT_SIZE })
             .height(90)
             .width('100%')
             .onChange(() => { this.scheduleAgentConfigSave(); });
@@ -4224,7 +4251,7 @@ struct Index {
 
           this.settingField('对话记录', '删除后无法恢复');
           Button('删除全部对话记录')
-            .fontSize(14)
+            .fontSize($r('sys.float.ohos_id_text_size_button2'))
             .height(40)
             .width('100%')
             .backgroundColor('#FF3B30')
@@ -4259,12 +4286,12 @@ struct Index {
         .onChange((value: boolean) => { this.setChecked(item.name, value); });
       Column() {
         Text(item.label)
-          .fontSize(14)
+          .fontSize($r('sys.float.ohos_id_text_size_body2'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .fontColor($r('app.color.text_primary'));
         Text(item.name)
-          .fontSize(11)
+          .fontSize($r('sys.float.ohos_id_text_size_caption1'))
           .fontFamily('monospace')
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -4276,7 +4303,7 @@ struct Index {
       .margin({ left: 8 });
       if (!item.classified || item.system) {
         Text(item.classified ? '系统' : '未知')
-          .fontSize(10)
+          .fontSize($r('sys.float.ohos_id_text_size_caption1'))
           .fontColor($r('app.color.text_secondary'))
           .borderRadius(4)
           .backgroundColor($r('app.color.log_background'))
@@ -4299,18 +4326,18 @@ struct Index {
       // 顶部栏
       Row() {
         Text('‹ 返回')
-          .fontSize(16)
+          .fontSize($r('sys.float.ohos_id_text_size_body1'))
           .fontColor($r('app.color.text_primary'))
           .onClick(() => { this.closeClearPage(); });
         Text('清空应用数据')
-          .fontSize(17)
+          .fontSize($r('sys.float.ohos_id_text_size_sub_title1'))
           .fontWeight(FontWeight.Bold)
           .layoutWeight(1)
           .textAlign(TextAlign.Center)
           .fontColor($r('app.color.text_primary'));
         // 右侧占位，保持标题居中
         Text('返回')
-          .fontSize(16)
+          .fontSize($r('sys.float.ohos_id_text_size_body1'))
           .opacity(0);
       }
       .width('100%')
@@ -4319,14 +4346,14 @@ struct Index {
       // 筛选与刷新
       Row() {
         Text('包含系统应用')
-          .fontSize(14)
+          .fontSize($r('sys.float.ohos_id_text_size_body2'))
           .fontColor($r('app.color.text_primary'));
         Toggle({ type: ToggleType.Switch, isOn: this.includeSystem })
           .enabled(!this.toolsBusy)
           .onChange((isOn: boolean) => { this.includeSystem = isOn; });
         Blank();
         Button('刷新')
-          .fontSize(13)
+          .fontSize($r('sys.float.ohos_id_text_size_button2'))
           .enabled(this.connected && !this.toolsBusy)
           .onClick(() => { this.onRefreshBundles(); });
       }
@@ -4335,13 +4362,13 @@ struct Index {
 
       Row() {
         Text(this.toolsStatus)
-          .fontSize(12)
+          .fontSize($r('sys.float.ohos_id_text_size_body3'))
           .fontColor($r('app.color.text_secondary'))
           .layoutWeight(1)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
         Text(`已选 ${this.selectedCount()}`)
-          .fontSize(12)
+          .fontSize($r('sys.float.ohos_id_text_size_body3'))
           .fontColor($r('app.color.text_secondary'));
       }
       .width('100%')
@@ -4349,7 +4376,7 @@ struct Index {
 
       Row() {
         Button('全选')
-          .fontSize(13)
+          .fontSize($r('sys.float.ohos_id_text_size_button2'))
           .layoutWeight(1)
           .type(ButtonType.Normal)
           .borderRadius(8)
@@ -4358,7 +4385,7 @@ struct Index {
           .enabled(!this.toolsBusy)
           .onClick(() => { this.setAllChecked(true); });
         Button('全不选')
-          .fontSize(13)
+          .fontSize($r('sys.float.ohos_id_text_size_button2'))
           .layoutWeight(1)
           .margin({ left: 8 })
           .type(ButtonType.Normal)
@@ -4403,6 +4430,9 @@ struct Index {
   @Builder
   mainPage() {
     Column() {
+      // 这个 22fp 也是故意写死的：系统文字档最大到 20fp（dialog_tittle），够不到 22。
+      // 挂 20 会让主标题缩一号、与页面顶栏标题（18fp）拉不开差距，主页的层级感变弱。
+      // 用户选择保持现在的大小。
       Text('HDC Toolbox')
         .fontSize(22)
         .fontWeight(FontWeight.Bold)
@@ -4410,7 +4440,7 @@ struct Index {
         .width('100%')
         .margin({ bottom: 4 });
       Text(`${this.status} · ${this.keyState}`)
-        .fontSize(12)
+        .fontSize($r('sys.float.ohos_id_text_size_body3'))
         .fontColor($r('app.color.text_secondary'))
         .width('100%')
         .margin({ bottom: 12 });
