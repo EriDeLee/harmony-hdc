@@ -42,6 +42,26 @@ const MODE_DATA_TRANSFER: string = 'dataTransfer';
  */
 const HEARTBEAT_MS: number = 200000;
 
+/**
+ * 把系统给的暂停原因码翻成人话。
+ *
+ * 原先日志里就是个裸数字（`reason=12`），查表才知道是什么。而这个枚举里
+ * 与我们有关的只有两三条 —— 我们只申请 dataTransfer，音频、定位、蓝牙那些
+ * 原因码永远不会出现，所以不必把十几条全列出来，认不出的原样带上数字即可。
+ */
+function describeSuspendReason(reason: number): string {
+  if (reason === backgroundTaskManager.ContinuousTaskSuspendReason.SYSTEM_SUSPEND_DATA_TRANSFER_LOW_SPEED) {
+    return `传输速度过低（原因码 ${reason}）`;
+  }
+  if (reason === backgroundTaskManager.ContinuousTaskSuspendReason.SYSTEM_SUSPEND_SYSTEM_LOAD_WARNING) {
+    return `系统负载告警（原因码 ${reason}）`;
+  }
+  if (reason === backgroundTaskManager.ContinuousTaskSuspendReason.SYSTEM_SUSPEND_USED_ILLEGALLY) {
+    return `被判定为不当使用（原因码 ${reason}）`;
+  }
+  return `原因码 ${reason}`;
+}
+
 export interface KeepAliveHooks {
   /** 用户划掉了通知栏那条通知 —— 系统会自动停止长时任务，这里要把 agent 也停掉。 */
   onCancelledByUser: (reason: string) => void;
@@ -73,6 +93,7 @@ export class KeepAlive {
   private notifyEnabled: boolean = false;
   private cancelListener: ((info: backgroundTaskManager.ContinuousTaskCancelInfo) => void) | null = null;
   private suspendListener: ((info: backgroundTaskManager.ContinuousTaskSuspendInfo) => void) | null = null;
+  private activeListener: ((info: backgroundTaskManager.ContinuousTaskActiveInfo) => void) | null = null;
 
   constructor(context: common.UIAbilityContext, hooks: KeepAliveHooks, log: LogSink) {
     this.context = context;
@@ -187,6 +208,8 @@ export class KeepAlive {
         `slot=${res.slotType} content=${res.contentType}`
       );
       this.attachListeners();
+      // 申请刚成功就问一次系统，把它眼里的状态记下来，作为后面对账的起点。
+      await this.logSystemState();
     } catch (err) {
       const e = err as BusinessError;
       this.log(
@@ -236,6 +259,42 @@ export class KeepAlive {
     }
   }
 
+  /**
+   * 把系统眼里我们名下的长时任务打一行日志。
+   *
+   * 为什么需要：`this.active` 是我们自己记的账。账和真实情况不符时，
+   * 原先没有任何办法发现 —— 界面显示"已保活"而系统那边其实已经没有了，
+   * 两种情况在日志里长得一模一样。这里读的是系统的答案。
+   *
+   * **只做诊断，不参与控制。** 不拿它去纠正 `this.active`：那需要想清楚
+   * "系统说没有、我们以为有"时该继续跑还是该停，而这个判断没有依据支撑，
+   * 现在也没有观察到这种情形。先把事实记下来。
+   *
+   * `includeSuspended` 传 true，否则被暂停的任务不出现在列表里 ——
+   * 那恰好是最需要看见的一种。
+   */
+  private async logSystemState(): Promise<void> {
+    let tasks: backgroundTaskManager.ContinuousTaskInfo[];
+    try {
+      tasks = await backgroundTaskManager.getAllContinuousTasks(this.context, true);
+    } catch (err) {
+      // API 20 起才有，低版本拿不到属预期
+      this.log(`[keepalive] 读系统长时任务列表失败（可忽略）: ${(err as BusinessError).message}`);
+      return;
+    }
+    if (tasks.length === 0) {
+      this.log('[keepalive] 系统那边一个长时任务都没有（我们自己记的是已保活）');
+      return;
+    }
+    for (const task of tasks) {
+      this.log(
+        `[keepalive] 系统记录 taskId=${task.continuousTaskId} 通知id=${task.notificationId} ` +
+        `类型=[${task.backgroundModes.join(',')}] 被暂停=${task.suspendState} ` +
+        `ability=${task.abilityName}`
+      );
+    }
+  }
+
   private attachListeners(): void {
     this.cancelListener = (info: backgroundTaskManager.ContinuousTaskCancelInfo): void => {
       // 用户划掉通知走的就是这条路。系统已经停了长时任务，这里负责把 agent 也停掉。
@@ -246,11 +305,17 @@ export class KeepAlive {
     };
     this.suspendListener = (info: backgroundTaskManager.ContinuousTaskSuspendInfo): void => {
       // 注意字段名与 CancelInfo 不同：这里是 continuousTaskId，那里是 id。
+      const why = describeSuspendReason(info.suspendReason);
       this.log(
         `[keepalive] 长时任务被暂停 id=${info.continuousTaskId} ` +
-        `suspended=${info.suspendState} reason=${info.suspendReason}`
+        `suspended=${info.suspendState} reason=${why}`
       );
-      this.hooks.onSuspended(`长时任务被系统暂停（原因码 ${info.suspendReason}）`);
+      this.hooks.onSuspended(`长时任务被系统暂停（${why}）`);
+    };
+    this.activeListener = (info: backgroundTaskManager.ContinuousTaskActiveInfo): void => {
+      // 与暂停配对的另一半。没有它的话只知道被暂停、不知道什么时候恢复，
+      // 而"一直没恢复"和"恢复了但任务已经停了"在日志里长得一模一样。
+      this.log(`[keepalive] 长时任务已恢复 id=${info.id}`);
     };
     try {
       backgroundTaskManager.on('continuousTaskCancel', this.cancelListener);
@@ -262,6 +327,11 @@ export class KeepAlive {
     } catch (err) {
       // API 20 起才有，低版本注册失败属预期
       this.log(`[keepalive] 注册暂停回调失败（可忽略）: ${(err as BusinessError).message}`);
+    }
+    try {
+      backgroundTaskManager.on('continuousTaskActive', this.activeListener);
+    } catch (err) {
+      this.log(`[keepalive] 注册恢复回调失败（可忽略）: ${(err as BusinessError).message}`);
     }
   }
 
@@ -281,6 +351,14 @@ export class KeepAlive {
         this.log(`[keepalive] 注销暂停回调失败: ${(err as BusinessError).message}`);
       }
       this.suspendListener = null;
+    }
+    if (this.activeListener !== null) {
+      try {
+        backgroundTaskManager.off('continuousTaskActive', this.activeListener);
+      } catch (err) {
+        this.log(`[keepalive] 注销恢复回调失败: ${(err as BusinessError).message}`);
+      }
+      this.activeListener = null;
     }
   }
 

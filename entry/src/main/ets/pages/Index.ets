@@ -122,6 +122,28 @@ const AGENT_PULL_HINT_VP: number = 12;
 // 它和被删的那套的根本区别是**不判断，也不放弃**。经过见 `doc/agent-session-ui.md`。
 /** 键盘弹起时输入行与键盘之间留多少。收起时不用这个值，见输入行处的注释。 */
 const AGENT_INPUT_GAP_ON_KEYBOARD_VP: number = 10;
+/** 任务输入框的字号。量行高要用同一个值，所以提成常量。 */
+const AGENT_INPUT_FONT_SIZE: number = 14;
+/**
+ * 任务输入框最多显示几行，超过就在框内自己滚。
+ * 不封顶的话一段长描述能把输入行顶到半屏高，把时间线挤没。
+ */
+const AGENT_INPUT_MAX_LINES: number = 4;
+/**
+ * 输入框上下内边距的近似值。
+ *
+ * 它只决定封顶落在 3.9 行还是 4.1 行上，所以不必精确，也**不需要**换设备重新量 ——
+ * 真正随设备与系统字号变化的是行高，那个是运行时量出来的（见 `measureInputMaxHeight`）。
+ */
+const AGENT_INPUT_PAD_SLACK_VP: number = 16;
+/**
+ * 量不到行高时的退路值。
+ *
+ * **这是退路，不是依据。** 它来自一次真机测量（`fontSize(14)` 下四行盒子高 264px，
+ * 按 3.25 密度折算约 81vp），所以只在那台设备的默认字号下准确。
+ * 正常路径永远不会用到它。
+ */
+const AGENT_INPUT_MAX_HEIGHT_FALLBACK_VP: number = 81;
 
 /*
  * 这里曾有 `AGENT_KEYBOARD_FOLLOW_MS = 250`：内容跟随键盘上移的动画时长，
@@ -394,6 +416,11 @@ struct Index {
   @State agentTaskInput: string = '';
   /** 软键盘是否弹起。只影响输入行的下边距，见 `watchKeyboard`。 */
   @State keyboardUp: boolean = false;
+  /**
+   * 任务输入框的高度上限（vp）。按真实行高在运行时算出来，见 `measureInputMaxHeight`。
+   * 初值是退路，正常情况下第一次布局前就会被真实值覆盖。
+   */
+  @State agentInputMaxHeightVp: number = AGENT_INPUT_MAX_HEIGHT_FALLBACK_VP;
   @State agentRunning: boolean = false;
   /**
    * 这一轮是不是用户自己按停的。按停止的人就在 AGENT 页上看着，不必再把应用拉回前台。
@@ -553,6 +580,7 @@ struct Index {
 
   aboutToAppear(): void {
     this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
+    this.measureInputMaxHeight();
     this.watchKeyboard();
     this.refreshKeyState();
     this.restoreConnection();
@@ -567,6 +595,41 @@ struct Index {
    *    「输入框直接贴在键盘上」，侵略性太强。
    *
    */
+  /**
+   * 算出任务输入框的高度上限：**行高由运行时测量得到**，不写死像素值。
+   *
+   * 为什么不能写死：`fontSize` 的单位随用户的系统字号设置缩放，字号调大后
+   * 同一个 vp 值就装不下四行，会把最后一行切掉一半。设备之间的默认行高也可能不同。
+   * 一台设备量出来的数字只对那台设备的那个字号成立。
+   *
+   * 量一行的高度再乘行数，而不是量一段带换行的文本：这样就不必依赖
+   * `measureTextSize` 怎么处理 `\n`（文档没写），而"一行的高度 × 行数"本来就是
+   * 行式排版的定义。
+   *
+   * 在 `aboutToAppear` 与每次 `onPageShow` 各算一次 —— 后者是为了接住
+   * "用户切到系统设置改了字号再回来"这种情况。
+   */
+  private measureInputMaxHeight(): void {
+    try {
+      const ctx = this.getUIContext();
+      const size: SizeOptions = ctx.getMeasureUtils().measureTextSize({
+        textContent: '四',
+        fontSize: AGENT_INPUT_FONT_SIZE
+      });
+      // 返回值官方注明单位是 px，类型是 Length（可能是数字也可能是带单位的串），
+      // 所以照本文件处理 `Area.height` 的同一套办法解析。
+      const linePx = Number.parseFloat(`${size.height}`);
+      if (!Number.isFinite(linePx) || linePx <= 0) {
+        this.appendLog(`[ui] 量到的行高不可用（${size.height}），输入框沿用退路高度`);
+        return;
+      }
+      const lineVp = ctx.px2vp(linePx);
+      this.agentInputMaxHeightVp = lineVp * AGENT_INPUT_MAX_LINES + AGENT_INPUT_PAD_SLACK_VP;
+    } catch (err) {
+      this.appendLog(`[ui] 量输入框行高失败，沿用退路高度: ${(err as BusinessError).message}`);
+    }
+  }
+
   private async watchKeyboard(): Promise<void> {
     let win: window.Window;
     try {
@@ -611,6 +674,8 @@ struct Index {
   }
 
   onPageShow(): void {
+    // 用户可能刚去系统设置改了字号再回来，行高得重新量。
+    this.measureInputMaxHeight();
     if (this.showPowerPage && this.connected) {
       this.syncPowerTimeoutState(false);
     }
@@ -3950,13 +4015,27 @@ struct Index {
 
       if (this.viewingLatest()) {
         Row() {
-          TextInput({
+          // 用 `TextArea` 而不是 `TextInput`：任务描述经常是一整句话，
+          // 单行框里只能看见最后十几个字，改完前半句就看不见了。
+          //
+          // 一行起步，长到约四行就封顶，再多在框内自己滚。
+          //
+          // **封顶用 `constraintSize`，不能用 `maxLines`。** 两者机制不同：
+          // `maxLines` 是"限制显示行数、超出截断"，`TextArea` 自己的内部滚动是
+          // "内容超过组件高度"才触发。我先写的是
+          // `maxLines(4, { overflowMode: MaxLinesMode.SCROLL })`，@since 20 的文档
+          // 写着"behavior can be displayed as the scrolling capability"，但真机上
+          // 界面树里那个节点是 `scrollable: "false"` —— 高度确实限在 4 行了，
+          // 滚动能力压根没打开，9 行内容里后 5 行既看不见也滑不到。
+          TextArea({
             placeholder: this.agentInputHint(),
             text: $$this.agentTaskInput
           })
             .enabled(!this.agentRunning)
             .layoutWeight(1)
-            .fontSize(14);
+            .fontSize(AGENT_INPUT_FONT_SIZE)
+            .minLines(1)
+            .constraintSize({ maxHeight: this.agentInputMaxHeightVp });
           if (this.agentRunning) {
             Button('停止')
               .fontSize(14)
@@ -3973,6 +4052,9 @@ struct Index {
           }
         }
         .width('100%')
+        // 输入框会随内容长高，按钮必须钉在底边，否则它会跟着一起往上飘、
+        // 停在多行文本的正中间。
+        .alignItems(VerticalAlign.Bottom)
         // 下边距分两档。键盘收起时压到 2vp：这一行下面还有约 95px 系统手势区，
         // 那块地板动不了（试过让根容器扩进去，反而把每页底部撑出更大的空白）。
         // 键盘弹起时手势区被键盘盖住，2vp 就变成输入框直接贴在键盘上，所以要留出余地。
