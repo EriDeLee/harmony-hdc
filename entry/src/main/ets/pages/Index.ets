@@ -123,11 +123,14 @@ const AGENT_PULL_HINT_VP: number = 12;
 /** 键盘弹起时输入行与键盘之间留多少。收起时不用这个值，见输入行处的注释。 */
 const AGENT_INPUT_GAP_ON_KEYBOARD_VP: number = 10;
 
-/**
- * 键盘弹起时内容跟随上移的时长。要和键盘弹出的观感对齐 ——
- * 不带动画时用户看到的是「聊天内容直接闪现」。
+/*
+ * 这里曾有 `AGENT_KEYBOARD_FOLLOW_MS = 250`：内容跟随键盘上移的动画时长，
+ * 注释写着「不带动画时用户看到的是聊天内容直接闪现」。**那句话是我凭想象写的，从未验证。**
+ *
+ * 真机日志证明键盘、页面、输入行都是一步到位（`beginH == endH`，一次视口变化 18ms 内完成），
+ * 带动画只会让内容单独落后，那条滞后就是用户报的「输入行上方一条内容闪一下」。
+ * 跟随现在无动画，这个常量没有用处了。理由详见 `followKeyboardScroll`。
  */
-const AGENT_KEYBOARD_FOLLOW_MS: number = 250;
 /**
  * 模型设置改动后多久落盘。攒一下再写，免得每敲一个字符就落一次盘。
  * 500ms 足够覆盖连续打字的间隔；离开设置页时会立刻补写，所以延迟不会造成丢失。
@@ -461,6 +464,12 @@ struct Index {
    * 而且一旦补偿不对称，反复开合键盘就能把内容一路「扭」到另一端。
    */
   private keyboardSavedY: Map<number, number> = new Map();
+  /**
+   * 这一轮键盘弹起至今，视口一共缩了多少。一次弹起会来好几次视口变化
+   * （键盘避让一次、输入行下边距变化一次），目标位置要从 `keyboardSavedY`
+   * 加上这个累计量算，不能拿动画中途的 `currentOffset()` 当基准。
+   */
+  private keyboardShrunk: Map<number, number> = new Map();
 
   /** 拉动时写在空隙里的提示。空串表示不显示。 */
   @State agentPullHint: string = '';
@@ -551,19 +560,54 @@ struct Index {
   }
 
   /**
-   * 盯着软键盘的升降。只用来决定输入行下边距 ——
-   * 键盘收起时贴着手势条留 2vp 就够（下面还有系统手势区），
-   * 键盘弹起时手势区被键盘盖住了，2vp 就变成「输入框直接贴在键盘上」，侵略性太强。
+   * 盯着软键盘的升降。两件事：
+   *
+   * 一、`keyboardHeightChange` 决定输入行下边距 —— 键盘收起时贴着手势条留 2vp 就够
+   *    （下面还有系统手势区），键盘弹起时手势区被键盘盖住了，2vp 就变成
+   *    「输入框直接贴在键盘上」，侵略性太强。
+   *
    */
   private async watchKeyboard(): Promise<void> {
+    let win: window.Window;
     try {
-      const win = await window.getLastWindow(this.getCtx());
+      win = await window.getLastWindow(this.getCtx());
+    } catch (err) {
+      this.appendLog(`[ui] 取窗口失败，键盘监听全部跳过: ${(err as BusinessError).message}`);
+      return;
+    }
+    try {
       win.on('keyboardHeightChange', (height: number) => {
         this.keyboardUp = height > 0;
       });
     } catch (err) {
       this.appendLog(`[ui] 监听键盘高度失败: ${(err as BusinessError).message}`);
     }
+  }
+
+  /**
+   * 内容跟随键盘的那一下滚动。**必须无动画。**
+   *
+   * 曾经这里带着动画（先是我猜的 250ms EaseInOut，后来换成系统自己的弹簧），
+   * 症状是「键盘弹起时输入行上方一条内容闪一下」。真机日志把原因摆平了：
+   *
+   *   will弹起  animated=true beginH=1089 endH=1089 dur=150
+   *   area      h=637.85 -> 322.77  delta=315.08     ← 只有这一次，18ms 内完成
+   *
+   * 键盘的高度从一开始就是终值（begin 与 end 相等），页面与输入行也是一步到位。
+   * 也就是说**除了内容，所有东西都已经瞬间到位**，动画只让内容单独落在后面，
+   * 那条被单独看见的滞后就是"闪一下"。
+   *
+   * 旁证一直在眼前：盯底窗口走的 `snapToEdge` 不带动画，实测不闪。
+   *
+   * 我当初写下的"不带动画会闪现"那句判断从来没有验证过，是凭想象写的。
+   * **不要再给这里加动画。** 要动画就得先解释清楚"为什么内容该比键盘慢"。
+   *
+   * 顺带说清最终的落点：真正好看的动画不该由这里做，而是把避让模式换成
+   * `OFFSET`（见 `openAgentPage`）—— 整页由系统平移，所有东西一起走，
+   * 这个函数就只剩下处理输入行下边距那 8vp 的小事了。
+   */
+  private followKeyboardScroll(scroller: Scroller, yOffset: number): void {
+    scroller.scrollTo({ xOffset: 0, yOffset, animation: false });
   }
 
   onPageShow(): void {
@@ -1231,6 +1275,18 @@ struct Index {
     this.showClearPage = false;
     this.showPowerPage = false;
     this.showAgentPage = true;
+    // 【试验中】这一页改用 OFFSET：键盘弹起时整页由系统平移，时间线高度不变。
+    //
+    // 为什么不用全局那个 RESIZE：RESIZE 下键盘一步到位地把页面压矮（实测 18ms、
+    // 时间线高度 637.85→322.77vp），而内容只能由我们事后滚 —— 于是内容永远比
+    // 键盘慢半拍，带动画是"输入行上方一条内容闪一下"，不带动画是"一次性跳过去"。
+    // OFFSET 下头部、时间线、输入行一起被平移，相对位置天然不变，也不存在错的那一帧。
+    //
+    // 代价：头部那一条（返回 / 标题 / 状态行）会被顶出屏幕外，打字时看不见。
+    //
+    // 全局那句 `setKeyboardAvoidMode(RESIZE)` 在 `aboutToAppear` 里，是终端页当年设的，
+    // 早于 AGENT 功能存在。所以这里按页覆盖，离开时改回去，别的页行为不变。
+    this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.OFFSET);
     this.restoreAgentSession();
     // 进页面就开一段盯底窗口，让位置落在最新那条上。
     //
@@ -1248,6 +1304,9 @@ struct Index {
 
   private closeAgentPage(): void {
     this.showAgentPage = false;
+    // 键盘避让模式是 UIContext 级别的全局设置，只在 AGENT 页覆盖成 OFFSET，
+    // 离开就还给终端页原来那套（见 openAgentPage 里的说明）。
+    this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
   }
 
   private async openAgentSettings(): Promise<void> {
@@ -2002,6 +2061,8 @@ struct Index {
     }
     this.agentRunning = false;
     this.showAgentPage = false;
+    // 断开连接也会把人踢出 AGENT 页，键盘避让模式同样要还回去。
+    this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
     if (this.agentApi !== null) {
       this.agentApi.abort();
       this.agentApi = null;
@@ -3493,23 +3554,58 @@ struct Index {
       if (delta === 0) {
         return;
       }
+      // 盯底窗口还开着的时候让位，不要插手。
+      //
+      // 理由是**避免两个写者操作同一个 Scroller**：那一页此刻正被 `stickIfWanted`
+      // 反复贴到某一边（它挂在 onScrollIndex / onReachStart / onReachEnd 上），
+      // 而贴边给出的结果在视口变化后本来就是对的（底就是底），不需要补偿再插一手。
+      //
+      // 清掉记下的原位是配套的：这一轮我们没挪过内容，收起时也就没有什么要还原。
+      // 万一窗口在弹起与收起之间到期，收起那一下会因为查不到原位而直接返回，
+      // 内容留在贴边处 —— 那正是想要的位置。
+      //
+      // **这个块当初是为了修「输入行上方一条内容闪一下」而加的，而那个诊断是错的。**
+      // 真因是内容带动画、别的东西瞬间到位（详见 `followKeyboardScroll` 与
+      // doc/agent-session-ui.md）。用户实测「盯底窗口开着时不闪、到期后才闪」，
+      // 与"打架"的预测正好相反 —— 打架从来不是原因。
+      // 留着它只因为上面那条卫生理由成立，别把它当成闪烁的解药。
+      const stickOn = this.agentStickUntil !== 0 && idx === this.agentStickPage &&
+        Date.now() < this.agentStickUntil;
+      if (stickOn) {
+        this.keyboardSavedY.delete(idx);
+        this.keyboardShrunk.delete(idx);
+        return;
+      }
       const scroller = this.scrollerFor(idx);
-      const follow: ScrollAnimationOptions = {
-        duration: AGENT_KEYBOARD_FOLLOW_MS,
-        curve: Curve.EaseInOut
-      };
       if (delta > 0) {
-        // 视口变矮（键盘弹起）：先记下原来的位置，再把内容往下挪同样的距离，
+        // 视口变矮（键盘弹起）：把内容往下挪同样的距离，
         // 这样原本贴在输入行上方的那一块仍然贴在输入行上方。
-        // 只在**第一次**变矮时记，动画式的多拍变矮不会把原位覆盖掉。
+        //
+        // **AGENT 页现在用 OFFSET 避让，键盘那一大截位移不会走到这里。**
+        // 整页由系统平移，列表高度不变。真正还会到这里的只有 8vp：
+        // `keyboardUp` 翻转让输入行的下边距从 2vp 变成 10vp，而输入行和 Swiper 是
+        // 同一个 Column 里的兄弟，它变高列表就变矮。实测日志：
+        //
+        //   area h=637.85->629.85 delta=8      ← OFFSET 下只剩这一条
+        //   area h=637.85->322.77 delta=315.08 ← RESIZE 时代是这样
+        //
+        // 目标位置从**一个固定基准**算：原位 + 至今缩掉的总量。
+        // 绝对不能写 `currentOffset() + delta` —— 多次触发时读到的可能是上一次
+        // 滚动还没落定的中间值，于是新目标算错。这与当初那个「反复开合把内容
+        // 一路扭到底」是同一个病根：拿正在变化的值当基准。
+        // 现在虽然只剩 8vp，这条纪律仍然要守：别人把避让模式改回 RESIZE 时，
+        // 这里要立刻还能算对。
         if (!this.keyboardSavedY.has(idx)) {
           this.keyboardSavedY.set(idx, scroller.currentOffset().yOffset);
+          this.keyboardShrunk.set(idx, 0);
         }
-        scroller.scrollTo({
-          xOffset: 0,
-          yOffset: scroller.currentOffset().yOffset + delta,
-          animation: follow
-        });
+        const base = this.keyboardSavedY.get(idx) ?? 0;
+        const total = (this.keyboardShrunk.get(idx) ?? 0) + delta;
+        this.keyboardShrunk.set(idx, total);
+        // 位移量只信 `onAreaChange` 量出来的这些 delta 之和，不去读键盘高度：
+        // 键盘多高与视口缩多少不是一回事（安全区、手势区都要分摊），
+        // 而这里量到的就是列表真实少掉的那部分。
+        this.followKeyboardScroll(scroller, base + total);
         return;
       }
       // 视口变高（键盘收起）：回到**记下的那个绝对位置**。
@@ -3524,7 +3620,8 @@ struct Index {
         return;
       }
       this.keyboardSavedY.delete(idx);
-      scroller.scrollTo({ xOffset: 0, yOffset: saved, animation: follow });
+      this.keyboardShrunk.delete(idx);
+      this.followKeyboardScroll(scroller, saved);
     })
     // List 的 onWillScroll 是**三个**参数（主轴偏移、状态、来源）；Scroll 那个是四个
     // （xOffset、yOffset、状态、来源），换容器时按 List 的签名写。
