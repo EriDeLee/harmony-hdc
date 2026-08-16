@@ -96,7 +96,9 @@ export interface AgentConfig {
   maxTokens: number;
   /**
    * 历史里保留最近几张截图。更早的换成一行文字。
-   * 0 表示一张都不留（每张截图用完即弃）。
+   *
+   * **0 表示不裁剪，全部保留。** 不设"一张都不留"这个档：那会让 screenshot 与 click
+   * 变成废功能 —— 裁剪跑在请求发出之前，连刚拍的那张也会被换成文字，模型一张都看不到。
    */
   keepRecentScreenshots: number;
 }

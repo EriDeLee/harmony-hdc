@@ -1427,7 +1427,12 @@ export class AgentLoop {
    */
   private pruneOldScreenshots(): void {
     const keep = this.config.keepRecentScreenshots;
-    if (keep < 0) {
+    // 0 就是不裁剪、全部保留。**不要改回 `keep < 0`。**
+    //
+    // 这里跑在请求发出之前，所以 keep=0 那一版连"刚拍的那张"也会被换成文字
+    // （`seen` 从 1 起，`1 <= 0` 不成立），结果 screenshot 与 click 两个工具
+    // 一起变成废功能：模型永远只收到一句"画面已移除"。
+    if (keep <= 0) {
       return;
     }
     let seen = 0;

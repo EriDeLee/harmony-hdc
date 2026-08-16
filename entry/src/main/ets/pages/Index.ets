@@ -1261,7 +1261,7 @@ struct Index {
       // 而没填要按默认 128000 处理，下次保存就会把他关掉的折叠又打开。
       this.cfgContextLimit = `${cfg.contextLimitTokens}`;
       this.cfgMaxTokens = `${cfg.maxTokens}`;
-      // 同上，0 的含义是「截图用完即弃」，也是明确选择，不能显示成空。
+      // 同上，0 的含义是「不裁剪、全部保留」，也是明确选择，不能显示成空。
       this.cfgKeepScreenshots = `${cfg.keepRecentScreenshots}`;
       this.cfgBlacklist = cfg.blacklistBundles.join('\n');
       this.cfgPromptCache = cfg.enablePromptCache;
@@ -1296,7 +1296,7 @@ struct Index {
       contextLimit = limitParsed;
     }
     const maxTok = Number.parseInt(this.cfgMaxTokens.trim(), 10);
-    // 截图保留数同样要区分「留空」和「填了 0」：留空取默认 5，填 0 是用完即弃。
+    // 截图保留数同样要区分「留空」和「填了 0」：留空取默认 5，填 0 是不裁剪、全部保留。
     const shotsText = this.cfgKeepScreenshots.trim();
     const shotsParsed = Number.parseInt(shotsText, 10);
     let keepShots = DEFAULT_KEEP_SCREENSHOTS;
@@ -3995,7 +3995,7 @@ struct Index {
             .width('100%')
             .onChange(() => { this.scheduleAgentConfigSave(); });
 
-          this.settingField('截图保留数', '历史里留最近几张截图，更早的换成一行文字。留空默认 5，填 0 用完即弃');
+          this.settingField('截图保留数', '历史里留最近几张截图，更早的换成一行文字。留空默认 5，填 0 全部保留');
           TextInput({ placeholder: '5', text: $$this.cfgKeepScreenshots })
             .type(InputType.Number)
             .fontSize(13)

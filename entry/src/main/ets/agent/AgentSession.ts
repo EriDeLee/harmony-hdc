@@ -19,15 +19,19 @@ const INDEX_NAME: string = 'index.json';
 /** 索引文件的版本。它的形状没变过，所以不跟着会话文件一起抬。 */
 const VERSION: number = 2;
 /**
- * 会话文件版本。
+ * 会话文件版本。时间线在同名的 `.timeline` 旁挂文件里，一条一行，
+ * 只追加不重写，因此没有条数上限。
  *
- * 2：时间线内嵌在会话 JSON 里，每次写盘整包重写，并砍到最后 200 条。
- * 3：时间线搬到同名的 `.timeline` 旁挂文件，一条一行，只追加不重写，因此不再有条数上限。
+ * **只认这一个版本，不向后兼容。** 版本 2 的会话（时间线内嵌在这份 JSON 里）
+ * 读到就丢弃并记一行日志。
  *
- * 读的时候两个版本都认：抬版本号不该让用户已有的对话作废。
+ * 曾经写过"读的时候两个版本都认"，那句话只对了一半 —— 读路径确实认，
+ * 写路径不认：v2 的时间线读进内存后会被标记成"已落盘"，而它并不在旁挂文件里，
+ * 下一次写盘 JSON 里就是空数组，两边同时消失。修那条路要给旧数据做一次迁移，
+ * 而实测设备上已经没有任何 v2 文件，于是按用户决定直接抛弃兼容，
+ * 不留一条自己都不成立的承诺。
  */
 const SESSION_VERSION: number = 3;
-const LEGACY_SESSION_VERSION: number = 2;
 /*
  * 这里曾有一条 `MAX_SESSIONS = 30`：段数超过 30 就从最老的开始删文件。**不要加回来。**
  *
@@ -253,16 +257,6 @@ export function registerSession(ctx: common.UIAbilityContext, id: string, log: L
   return index;
 }
 
-/**
- * 写一段会话。
- *
- * 分两个文件：
- * · `<id>.json` 装快照与元信息，每次整包重写。它的体积由折叠管着，不会无限涨。
- * · `<id>.timeline` 装时间线，只把 `pendingTimeline` 这几条追加到末尾。
- *
- * `pendingTimeline` 必须是"上次写盘之后新产生的那几条"，由调用方负责算。
- * 这里不去数文件已有多少行来推断：那要把整个文件读回来，追加式省下的开销又还回去了。
- */
 /** 读回这一段原来的创建时间。没有或读不出来返回 null，由调用方填当前时间。 */
 function readCreatedAt(ctx: common.UIAbilityContext, id: string): number | null {
   const text = readText(sessionPath(ctx, id), () => {});
@@ -280,6 +274,16 @@ function readCreatedAt(ctx: common.UIAbilityContext, id: string): number | null 
   }
 }
 
+/**
+ * 写一段会话。
+ *
+ * 分两个文件：
+ * · `<id>.json` 装快照与元信息，每次整包重写。它的体积由折叠管着，不会无限涨。
+ * · `<id>.timeline` 装时间线，只把 `pendingTimeline` 这几条追加到末尾。
+ *
+ * `pendingTimeline` 必须是"上次写盘之后新产生的那几条"，由调用方负责算。
+ * 这里不去数文件已有多少行来推断：那要把整个文件读回来，追加式省下的开销又还回去了。
+ */
 export function saveSession(
   ctx: common.UIAbilityContext,
   id: string,
@@ -317,7 +321,7 @@ export function saveSession(
 }
 
 /**
- * 读回一段会话的时间线。版本 2 的会话没有旁挂文件，时间线在会话 JSON 里。
+ * 读回一段会话的时间线。
  *
  * 单行解析失败只跳过那一行：追加写有可能在进程被杀的瞬间留下半条记录，
  * 为了半条坏记录丢掉整段历史不值得。
@@ -365,11 +369,6 @@ export function loadSessionById(
     if (parsed === null || parsed.snapshot === undefined) {
       log(`[session] 会话 ${id} 内容不完整，丢弃`);
       return null;
-    }
-    if (parsed.version === LEGACY_SESSION_VERSION) {
-      // 旧格式：时间线内嵌在这份 JSON 里，原样用。它最多只有 200 条，
-      // 更早的在当年写盘时就已经被裁掉了，这里补不回来。
-      return parsed;
     }
     if (parsed.version !== SESSION_VERSION) {
       log(`[session] 会话 ${id} 版本对不上，丢弃`);
