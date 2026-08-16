@@ -54,6 +54,13 @@ export interface ObservedElement {
   accessibilityId: string;
   nodeId: string;
   text: string;
+  /**
+   * 节点自己的文字，未经打码。**只给应用内部比对用，绝不进发给模型的文本。**
+   *
+   * `text` 会被 maskSensitive 改写（身份证、银行卡），而 input_text 要拿刚输入的原文
+   * 去界面上确认落没落上。两者必须分开，否则打码过的那类内容永远确认不了。
+   */
+  rawText: string;
   type: string;
   centerX: number;
   centerY: number;
@@ -225,7 +232,18 @@ function usableId(value: string): string {
   return value;
 }
 
-/** 手机号、身份证、银行卡打码。顺序固定：身份证优先于银行卡，避免 18 位被当成卡号。 */
+/**
+ * 身份证、银行卡打码。顺序固定：身份证优先于银行卡，避免 18 位被当成卡号。
+ *
+ * **手机号那一条已删除，不要加回来。** 原先还有 `1[3-9]\d{9}` → `138****8000`，
+ * 它与「用界面文字判定动作是否生效」这套判据直接冲突：`input_text` 打完字之后拿原文
+ * 去观测里找，界面上存的却是打码后的串，于是永远找不到 —— 输入其实成功了，工具报
+ * 「未能在界面上确认输入内容」，模型据此重试，把同一个号码又输一遍。手机号是输入框里
+ * 最常打的一类数字，所以这条规则的代价远大于它挡住的东西。
+ *
+ * 身份证和银行卡保留：它们极少由 agent 亲手输入，撞上同一个坑的概率低得多，
+ * 而万一撞上，`containsText` 已经改成拿未打码的原文比对（见 ObservedElement.rawText）。
+ */
 export function maskSensitive(text: string): string {
   let out = text;
   out = out.replace(/\d{6}(\d{8})(\d{3})([\dXx])/g, (match: string): string => {
@@ -233,9 +251,6 @@ export function maskSensitive(text: string): string {
   });
   out = out.replace(/\d{12,15}(\d{4})/g, (match: string): string => {
     return '****' + match.substring(match.length - 4);
-  });
-  out = out.replace(/1[3-9]\d{9}/g, (match: string): string => {
-    return match.substring(0, 3) + '****' + match.substring(7);
   });
   return out;
 }
@@ -377,6 +392,25 @@ function skipBorrowedContainer(node: LayoutNode, clickable: boolean, scrollable:
   return labelIsBorrowed(node) && hasClickableDescendant(node);
 }
 
+/**
+ * 界面树里有没有锁屏窗口。
+ *
+ * **这个判据比它的姊妹宽松，而那个不对称是未验证的风险，不是设计。**
+ *
+ * `DeviceControl.lockWindowInForeground` 走 WMS 转储，专门加固过：只看前台段，
+ * 「后台段里那条常驻的不算」。这里走 `dumpLayout -i`，扫的是**所有**窗口，
+ * 既不看 `aVisible`、也不分前台后台——而同一个文件里就写着那份转储包含后台窗口和
+ * 桌面那一堆（壁纸、状态栏、手势条、锁屏）。
+ *
+ * 一旦解锁状态下的转储里出现匹配 `LOCK_ID_HINTS` 的节点，后果是全面失明：观测不再输出
+ * 任何元素、`observeScreen` 不记录清单、`screenshot` 直接拒绝、`launchApp` 与 `guard`
+ * 一律回「已锁屏」，`pumpGuarded` 连任务都不让起。
+ *
+ * 当前设备上没有发生，所以要么解锁时那个窗口不在转储里、要么它的 id 不匹配 ——
+ * **两者都不是代码保证的，只是这台机器的现状。**
+ * 要验证：解锁状态下跑一次 `uitest dumpLayout -i`，在结果里搜 LOCK_ID_HINTS 那三个串。
+ * 真的搜到了，就得给这里补上「只认前台窗口」的过滤，和姊妹函数对齐。
+ */
 function detectLocked(windows: LayoutNode[]): boolean {
   let found = false;
   const visit = (n: LayoutNode): void => {
@@ -462,6 +496,10 @@ function collect(
           accessibilityId: aAccessibilityId(node),
           nodeId: aNodeId(node),
           text: mask ? maskSensitive(ownText) : ownText,
+          // 未打码的原文。**只给应用内部用，从不发给模型。**
+          // input_text 靠它确认「刚打的字真的落在界面上了」；用打过码的 text 去比，
+          // 身份证或银行卡号会永远比不上，把成功的输入报成失败。
+          rawText: ownText,
           type,
           centerX,
           centerY,
@@ -654,6 +692,20 @@ export function flatLabel(label: string): string {
 }
 
 /**
+ * 纵向位置这一列的开关。
+ *
+ * 它只服务 `click`，而 `click` 与 `screenshot` 同一个开关：端点不支持图片时
+ * `buildTools(false)` 会把两个都摘掉。那种情况下这一列没有任何工具能消费，
+ * 却仍然按每行 12 字符、每次观测几十行的量重发，所以要能关。
+ */
+let spansEnabled: boolean = true;
+
+/** 端点拒图、`click` 被摘掉时调用 `setSpansEnabled(false)`。 */
+export function setSpansEnabled(on: boolean): void {
+  spansEnabled = on;
+}
+
+/**
  * 元素在画面上的纵向位置，接在清单行尾。只有 `click` 用得到。
  *
  * 由来是一次真机故障：模型要点富文本里第二行待办的勾选框，那个勾选框画在控件内部、
@@ -671,7 +723,7 @@ export function flatLabel(label: string): string {
  * 看得见目标就贴在它下面，于是不会给出 0.426。所以每一行都给，不做挑选。
  */
 function verticalSpan(e: ObservedElement, screenHeight: number): string {
-  if (screenHeight <= 0) {
+  if (!spansEnabled || screenHeight <= 0) {
     return '';
   }
   const top = (e.bounds.top / screenHeight).toFixed(3);
@@ -684,13 +736,26 @@ function verticalSpan(e: ObservedElement, screenHeight: number): string {
 /** 渲染成发给模型的文本。锁屏时不输出任何屏幕内容。 */
 export function renderObservation(obs: Observation): string {
   const lines: string[] = [];
-  lines.push(`屏幕 ${obs.screenWidth}x${obs.screenHeight}`);
+  // 这里原先第一行是 `屏幕 1260x2720`。**不要加回来。** 模型侧的坐标全是 0~1 比例
+  // （click 的 x/y、draw 的笔画、行尾的纵向位置），没有一个工具收像素值；像素只在
+  // 应用内部用来把比例乘回去（DeviceControl.clickInside）。而且它与系统提示词里
+  // 「屏幕像素坐标你看不到，也不需要」当场矛盾。
   if (obs.locked) {
     lines.push('设备已锁屏。当前无法执行任何操作，也不提供屏幕内容。');
     return lines.join('\n');
   }
   lines.push(`前台应用 ${obs.foregroundBundle}${obs.foregroundAbility.length > 0 ? ' / ' + obs.foregroundAbility : ''}`);
-  lines.push(`键盘 ${obs.keyboardVisible ? '已弹起' : '已收起'}`);
+  // 键盘**只在弹起时**说一句，收起不输出。
+  //
+  // 收起是常态，每次观测都写一遍「已收起」是纯浪费；而弹起会占掉半屏，被挡住的元素
+  // 直接从清单里消失 —— 那时模型看到的是一张莫名变短的表，需要知道原因，否则可能
+  // 白费一轮去滑动或重新观测。
+  //
+  // 一度把这行整个删掉，那是错的：`decisions.md` 里「动作结果的状态行全删」那条决策，
+  // 依据正是「前台/键盘/弹窗这几样表头里本来就有」。删掉它等于抽掉那条决策的前提。
+  if (obs.keyboardVisible) {
+    lines.push('键盘 已弹起');
+  }
   if (obs.elements.length === 0) {
     lines.push('未找到可操作元素。');
     return lines.join('\n');
@@ -699,11 +764,15 @@ export function renderObservation(obs: Observation): string {
   let normalHeaderWritten = false;
   for (const e of obs.elements) {
     if (e.inModal && !modalHeaderWritten) {
-      lines.push('【弹窗】遮挡下层界面，只能先处理这里');
+      // 只留标记本身。「遮挡下层界面，只能先处理这里」这条规则在缓存前缀里已经有
+      // 两份（系统提示词、observe 的描述），每次观测再发一遍是第三份。
+      lines.push('【弹窗】');
       modalHeaderWritten = true;
     }
-    if (!e.inModal && !normalHeaderWritten) {
-      lines.push(obs.modalPresent ? '【被遮挡的界面】' : '【界面】');
+    // 没有弹窗时不写分组头：那时 `【界面】` 不携带任何信息，全部元素本来就都在界面上。
+    // 有弹窗时才需要 `【被遮挡的界面】` 去和上面那组对照。
+    if (!e.inModal && !normalHeaderWritten && obs.modalPresent) {
+      lines.push('【被遮挡的界面】');
       normalHeaderWritten = true;
     }
     lines.push(`${e.index} ${describeFlags(e)} ${flatLabel(e.label)}${verticalSpan(e, obs.screenHeight)}`);
@@ -781,9 +850,13 @@ export const NO_CHANGE_TEXT: string = '界面树没有变化（不代表动作�
  */
 export function reportAfterAction(before: Observation, after: Observation): string {
   const rendered = renderObservation(after);
-  // 比的是渲染后的文本而不是标签集合：顺序变了、键盘变了、弹窗来了都会让文本不同，
-  // 而那些情况下编号或前提已经变了，必须重新发表。按标签集合比会漏掉"集合相同、
-  // 顺序变了"这一种，那一种恰恰是编号错位最危险的情形。
+  // 比的是渲染后的文本而不是标签集合：顺序变了、弹窗来了都会让文本不同，而那些情况下
+  // 编号或前提已经变了，必须重新发表。按标签集合比会漏掉"集合相同、顺序变了"这一种，
+  // 那一种恰恰是编号错位最危险的情形。
+  //
+  // 键盘弹收**不再算变化**：它已经不出现在渲染文本里（模型侧没有工具消费它），
+  // 所以只有键盘状态不同时这里会返回"没有变化"。这与 sameObservation 是两回事，
+  // 那个是判稳用的、仍然比键盘 —— 键盘正在弹起说明界面还在动，不能急着采样。
   return rendered === renderObservation(before) ? NO_CHANGE_TEXT : rendered;
 }
 

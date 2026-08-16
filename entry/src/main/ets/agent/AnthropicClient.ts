@@ -508,6 +508,29 @@ function classifyStatus(status: number, body: string): ApiErrorKind {
   return status >= 200 && status < 300 ? 'none' : 'bad_request';
 }
 
+/**
+ * 流内 `event: error` 的分类。
+ *
+ * **不要拿 HTTP 状态码去判它。** 这类错误是在一条已经 200 的响应里送来的
+ * （Anthropic 的 `overloaded_error` 就走这条），`classifyStatus(200, …)` 会返回
+ * `'none'` —— 那个值的语义是"没有错误"，既不在可重试集合里，还会让用户看到
+ * 「请求失败(none)」这种自相矛盾的提示。
+ *
+ * 所以按报文本身分类，并且默认按可重试的服务端错误处理：流已经建立起来了，
+ * 中途出错绝大多数是过载或临时故障。
+ */
+function classifyStreamError(message: string): ApiErrorKind {
+  const lowered = message.toLowerCase();
+  if (lowered.indexOf('invalid_request') >= 0 || lowered.indexOf('authentication') >= 0 ||
+    lowered.indexOf('permission') >= 0) {
+    return 'bad_request';
+  }
+  if (lowered.indexOf('rate_limit') >= 0) {
+    return 'rate_limit';
+  }
+  return 'server';
+}
+
 function extractErrorMessage(body: string, fallback: string): string {
   if (body.length === 0) {
     return fallback;
@@ -621,6 +644,11 @@ export class AnthropicClient {
     this.aborted = false;
     let attempt = 0;
     let effective: SendOptions = options;
+    // 只在这一次调用内有效，**故意不跨请求记忆**。
+    //
+    // 记住它能省下「每轮白传一次完整请求体去撞同一个 400」，但代价是一次误判就永久
+    // 关掉提示缓存 —— mentionsCache 是按报文措辞猜的，兼容端点措辞不统一，一条偶然
+    // 提到 cache 的 400 就会让后面每一轮都失去缓存。缓存省下的远多于那一次重试。
     let cacheAlreadyDropped = false;
     let lastResult: ApiResult = fail('network', '尚未发起请求', 0);
     while (attempt <= options.maxRetries) {
@@ -749,7 +777,8 @@ export class AnthropicClient {
           return;
         }
         if (streamError !== null) {
-          finish(fail(classifyStatus(status, streamError), streamError, status));
+          // 按报文分类，不按状态码 —— 这条路上状态码必然是 200，见 classifyStreamError。
+          finish(fail(classifyStreamError(streamError), streamError, status));
           return;
         }
         finish(succeed(assembler.result(), status));

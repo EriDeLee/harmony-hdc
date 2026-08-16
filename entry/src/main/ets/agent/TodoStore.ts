@@ -129,6 +129,12 @@ export class TodoStore {
   /** 用于存盘恢复。直接灌入已有条目，不走 rewrite 的校验与截断。 */
   load(items: TodoItem[]): void {
     this.items = items.slice(0, MAX_ITEMS);
+    // 恢复出来的计划就是计划。不置这个标志，闸门会用「开始操作之前请先调用 todo_write
+    // 列出你的计划」拒掉恢复后的第一个动作 —— 而同一次恢复刚把这份计划渲染进状态栏，
+    // 模型于是被告知一件与屏幕上写着的相反的事，还白费一轮。
+    if (this.items.length > 0) {
+      this.initialized = true;
+    }
   }
 
   list(): TodoItem[] {
@@ -307,18 +313,28 @@ export class TodoStore {
       return { accept: true, reminder: '', abandoned };
     }
     this.reminders += 1;
+    // 后面原先还有三句说明「是忘了打勾还是没做、分别该怎么办」。删掉：done 的描述
+    // 已经说过系统会把计划回给你让你判断，todo_write 的描述也说过完成一步就改成 done、
+    // 结束时不应再有未完成项。这条消息真正承载信息的是数量和这份重新渲染的清单。
     const reminder =
       `你已宣布完成，但计划里还有 ${left} 项没有勾掉。\n` +
-      `${this.render()}\n` +
-      '请判断：是忘记打勾了，还是这些步骤其实没做？\n' +
-      '忘记打勾就直接用 todo_write 把它们改成已完成；' +
-      '没做就继续执行剩下的步骤，做完再勾。' +
-      '如果某一项确实不需要做了，把它从计划里删掉或改成已放弃。';
+      `${this.render()}`;
     return { accept: false, reminder, abandoned: 0 };
   }
 
   remindersUsed(): number {
     return this.reminders;
+  }
+
+  /**
+   * 新任务开始时清掉追问预算。
+   *
+   * 这个预算是为「一次 done 争议」设的（模型说做完了、我们指出还有没勾的、最多追问两次）。
+   * 不清的话，第一个任务用完之后，第二个任务的第一次 done 会被直接接受，剩余计划项
+   * 静默标成已放弃 —— 而这个实例是跨任务复用的，后续消息走 continueWith，不重建。
+   */
+  resetReminders(): void {
+    this.reminders = 0;
   }
 }
 

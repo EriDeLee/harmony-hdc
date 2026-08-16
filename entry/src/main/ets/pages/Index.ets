@@ -131,6 +131,10 @@ const AGENT_INPUT_GAP_ON_KEYBOARD_VP: number = 10;
  *
  * 挑 `body1` 的第二个原因：输入框的**灰字**默认用的就是它。真实值挂同一个 token
  * 之后，两者再也不可能一大一小 —— 那正是把它们分开写的老毛病。
+ *
+ * 试过提到 `sub_title1`（18fp）让输入框变大，观感不好，已改回。要加大输入框请调行数
+ * （`AGENT_INPUT_MAX_LINES`）或起步行数，不要动字号 —— 字号一变，灰字、按钮、周围
+ * 标签的相对关系全跟着变。
  */
 const INPUT_FONT_SIZE: Resource = $r('sys.float.ohos_id_text_size_body1');
 /**
@@ -143,6 +147,7 @@ const AGENT_INPUT_MAX_LINES: number = 4;
  *
  * 它只决定封顶落在 3.9 行还是 4.1 行上，所以不必精确，也**不需要**换设备重新量 ——
  * 真正随设备与系统字号变化的是行高，那个是运行时量出来的（见 `measureInputMaxHeight`）。
+ * 同一个值也用来推**一行时的最小高度**，让 AGENT 的 TextArea 和别处的 TextInput 齐平。
  */
 const AGENT_INPUT_PAD_SLACK_VP: number = 16;
 /**
@@ -153,6 +158,13 @@ const AGENT_INPUT_PAD_SLACK_VP: number = 16;
  * 正常路径永远不会用到它。
  */
 const AGENT_INPUT_MAX_HEIGHT_FALLBACK_VP: number = 81;
+/**
+ * 量不到行高时，一行高度的退路值。
+ *
+ * **这是退路，不是依据。** 由 81vp 那个四行退路除以行数再加回内边距推得，
+ * 只在那台设备的默认字号下准确。正常路径永远不会用到它。
+ */
+const AGENT_INPUT_MIN_HEIGHT_FALLBACK_VP: number = 40;
 
 /*
  * 这里曾有 `AGENT_KEYBOARD_FOLLOW_MS = 250`：内容跟随键盘上移的动画时长，
@@ -430,6 +442,14 @@ struct Index {
    * 初值是退路，正常情况下第一次布局前就会被真实值覆盖。
    */
   @State agentInputMaxHeightVp: number = AGENT_INPUT_MAX_HEIGHT_FALLBACK_VP;
+  /**
+   * 任务输入框的高度下限（vp），也就是空着时的高度。
+   *
+   * `TextArea` 没有 `TextInput` 那个默认最小高度，实测比全应用其他输入框矮 17px，
+   * 空着的时候显得局促。这里按「一行行高 + 内边距」推出来补齐，**不写死像素**：
+   * 130px 是这台设备在这个字号下的值，换设备或换系统字号就不对了。
+   */
+  @State agentInputMinHeightVp: number = AGENT_INPUT_MIN_HEIGHT_FALLBACK_VP;
   @State agentRunning: boolean = false;
   /**
    * 这一轮是不是用户自己按停的。按停止的人就在 AGENT 页上看着，不必再把应用拉回前台。
@@ -634,6 +654,9 @@ struct Index {
       }
       const lineVp = ctx.px2vp(linePx);
       this.agentInputMaxHeightVp = lineVp * AGENT_INPUT_MAX_LINES + AGENT_INPUT_PAD_SLACK_VP;
+      // 一行时的高度，用来补上 TextArea 缺的那个默认最小高度。同一套推导，
+      // 所以字号或系统字体缩放变了它自己跟着走。
+      this.agentInputMinHeightVp = lineVp + AGENT_INPUT_PAD_SLACK_VP;
     } catch (err) {
       this.appendLog(`[ui] 量输入框行高失败，沿用退路高度: ${(err as BusinessError).message}`);
     }
@@ -862,6 +885,20 @@ struct Index {
   }
 
   /**
+   * 设备控制层的设置。**建立连接和改设置都要走这一处**，不要在两个地方各写一份 ——
+   * 黑名单曾因此有两个持有者：这一层拿的是构造时捕获的副本，用户在设置页删掉一个应用
+   * 之后它仍按旧名单拒绝，而且从界面上没法修。
+   */
+  private buildActionSettings(config: AgentConfig | null): ActionSettings {
+    return {
+      pollIntervalMs: AGENT_POLL_INTERVAL_MS,
+      stableTimeoutMs: AGENT_STABLE_TIMEOUT_MS,
+      commandTimeoutMs: AGENT_COMMAND_TIMEOUT_MS,
+      blacklistBundles: config !== null ? config.blacklistBundles : []
+    };
+  }
+
+  /**
    * 建立 agent 的设备控制层。包名与输入法都在运行时探测，不写死：
    * 实测输入法包名只能靠 `ime -g` 拿到，而它决定了"键盘是否弹起"的判断。
    */
@@ -889,12 +926,7 @@ struct Index {
       dumpPath: AGENT_DUMP_PATH,
       maskSensitiveText: true
     };
-    const settings: ActionSettings = {
-      pollIntervalMs: AGENT_POLL_INTERVAL_MS,
-      stableTimeoutMs: AGENT_STABLE_TIMEOUT_MS,
-      commandTimeoutMs: AGENT_COMMAND_TIMEOUT_MS,
-      blacklistBundles: config !== null ? config.blacklistBundles : []
-    };
+    const settings: ActionSettings = this.buildActionSettings(config);
     this.agent = new DeviceControl(conn, observeCtx, settings, (line: string) => this.appendLog(line));
     this.appendLog(
       `[agent] 设备控制已就绪 本应用=${ownBundle} 输入法=${imeBundle.length > 0 ? imeBundle : '未探测到'} ` +
@@ -1656,6 +1688,9 @@ struct Index {
     this.syncHistoryFlag();
     // 每次发送都推入最新配置，否则改完设置还在用建实例时那一份。
     loop.applyConfig(config);
+    // 设备控制层持有自己的一份设置副本，也要一起换掉。只更新 loop 的话，黑名单会有
+    // 两个答案：加条目被闸门挡住看不出问题，删条目则表现为「已解禁的应用仍被拒绝」。
+    device.applySettings(this.buildActionSettings(config));
     try {
       if (continuing) {
         await loop.continueWith(task);
@@ -4055,7 +4090,10 @@ struct Index {
             .fontSize(INPUT_FONT_SIZE)
             .placeholderFont({ size: INPUT_FONT_SIZE })
             .minLines(1)
-            .constraintSize({ maxHeight: this.agentInputMaxHeightVp });
+            .constraintSize({
+              minHeight: this.agentInputMinHeightVp,
+              maxHeight: this.agentInputMaxHeightVp
+            });
           if (this.agentRunning) {
             Button('停止')
               .fontSize($r('sys.float.ohos_id_text_size_button2'))

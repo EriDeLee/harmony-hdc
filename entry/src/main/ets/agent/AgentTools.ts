@@ -60,7 +60,9 @@ function indexSchema(what: string): Object {
   return {
     type: 'object',
     properties: {
-      index: { type: 'integer', description: `要${what}的元素编号，取自最近一次界面观测。` }
+      // 「取自最近一次界面观测」这半句不写在这里。它随 tap / long_press / double_tap
+      // 各发一份，而系统提示词里已有一条讲后果的（用旧编号会被拒绝），那条才是有用的。
+      index: { type: 'integer', description: `要${what}的元素编号。` }
     } as Object,
     required: ['index']
   };
@@ -84,7 +86,9 @@ export function buildTools(includeScreenshot: boolean): ApiTool[] {
       '改写状态都在这一个调用里完成。\n' +
       '完成一步就把那一项改成 done。计划可以随时改：发现原计划不对就重写它，' +
       '这是被鼓励的，不是失败。\n' +
-      '注意：勾选比例会显示为通知栏的进度环，所以计划的粒度决定进度好不好看。' +
+      // 这里原先还有一句「勾选比例会显示为通知栏的进度环，所以粒度决定进度好不好看」。
+      // 删掉：通知是应用内部的事（AgentHooks.onProgress → KeepAlive.update），模型碰不到，
+      // 而后面这句关于粒度的建议本身就站得住，不需要那个机制作理由。
       '建议 3 到 8 项，每项是用户能看懂的一件事，不要写成"点第 5 个按钮"这种机械步骤。\n' +
       '任务结束时计划里不应再有未完成项。',
     input_schema: {
@@ -111,6 +115,15 @@ export function buildTools(includeScreenshot: boolean): ApiTool[] {
     }
   });
 
+  // click 和「行尾那两个数」是一体的，都随 includeScreenshot 存亡：端点不支持图片时
+  // 下面的 if 会把 click 一起摘掉，Observer 也不再输出那一列（setSpansEnabled(false)）。
+  // 所以这两句必须跟着消失，否则描述会指着一个不在工具表里的工具、讲一个不存在的列。
+  const clickCoordNote: string = includeScreenshot ?
+    '唯一用到坐标的是 click，它要的是画面上的比例，不是像素。\n' : '';
+  const spanNote: string = includeScreenshot ?
+    ('每行末尾那两个数是这个元素在画面上的纵向位置，写成 上边~下边，' +
+      '0 是画面顶边、1 是底边。只有 click 用得到。\n') : '';
+
   tools.push({
     name: TOOL_OBSERVE,
     description:
@@ -118,7 +131,7 @@ export function buildTools(includeScreenshot: boolean): ApiTool[] {
       // 这里原先写的是「不需要也无法使用坐标」。那是断言，而 click 恰恰要坐标 ——
       // 模型每一轮都同时读到"你无法使用坐标"和"用比例坐标点"，两条互相否定。
       '每个元素形如「编号 可点 可输入 标签」。你之后的操作都用这些编号来指定目标。' +
-      '唯一用到坐标的是 click，它要的是画面上的比例，不是像素。\n' +
+      clickCoordNote +
       // 标记名必须和 Observer.describeFlags 的输出逐字一致。原来这里写「可滚」而输出是
       // 「可滚动」，而且从没提过「文本」这个标记。
       '标记含义：可点=能点击，可滚动=能滚动，可输入=是输入框，' +
@@ -127,8 +140,7 @@ export function buildTools(includeScreenshot: boolean): ApiTool[] {
       // 已有的内容，先按了 20 次退格去清空 —— 而那一轮它手里就有搜索页的截图，
       // 图上那行字是灰的，它照样读错了。
       '标签包在圆括号里的，是这个空框的占位提示，不是框里的内容 —— 那个框是空的。\n' +
-      '每行末尾那两个数是这个元素在画面上的纵向位置，写成 上边~下边，' +
-      '0 是画面顶边、1 是底边。只有 click 用得到。\n' +
+      spanNote +
       '出现【弹窗】时它会排在最前面并遮挡下层界面，必须先处理弹窗，' +
       '点被遮挡的元素不会有反应。\n' +
       // 原先这句是「所以通常不需要主动再调 observe」。那时动作结果里只有标签、没有编号，
@@ -170,9 +182,10 @@ export function buildTools(includeScreenshot: boolean): ApiTool[] {
       input_schema: {
         type: 'object',
         properties: {
-          index: { type: 'integer', description: '那个位置属于哪个元素，编号取自最近一次界面观测。' },
-          x: { type: 'number', description: '画面横向比例，0~1，0 是画面左边缘。' },
-          y: { type: 'number', description: '画面纵向比例，0~1，0 是画面上边缘。' }
+          // 范围与原点在上面的描述里已经讲全（0~1，0,0 是画面左上角），schema 里不再重复。
+          index: { type: 'integer', description: '那个位置属于哪个元素。' },
+          x: { type: 'number', description: '画面横向比例。' },
+          y: { type: 'number', description: '画面纵向比例。' }
         } as Object,
         required: ['index', 'x', 'y']
       }
@@ -227,8 +240,7 @@ export function buildTools(includeScreenshot: boolean): ApiTool[] {
   tools.push({
     name: TOOL_DRAG,
     description:
-      '把一个元素拖到另一个元素的位置上，用于排序、拖拽移动这类交互。' +
-      '两个编号都取自同一次观测。',
+      '把一个元素拖到另一个元素的位置上，用于排序、拖拽移动这类交互。',
     input_schema: {
       type: 'object',
       properties: {
@@ -251,16 +263,20 @@ export function buildTools(includeScreenshot: boolean): ApiTool[] {
       '一笔之内是连续的一道墨迹；换一笔就是抬笔再落笔。\n' +
       '曲线用足够多的短线段去逼近，段数越多越圆滑。' +
       `一次最多 ${MAX_DRAW_SEGMENTS} 段（所有笔加起来），超了就拆成多次调用。\n` +
-      '注意：墨迹不出现在界面树里，所以画完之后界面观测会显示"没有变化"，' +
-      '这不代表失败。要确认画成什么样，调用 screenshot 看。',
+      // 原先写的是「画完之后界面观测会显示"没有变化"」。那个消息根本不会到 ——
+      // DeviceControl.draw 不调 reportAndRemember，既不发观测也不发 NO_CHANGE_TEXT。
+      '注意：墨迹不出现在界面树里，所以画完不会回给你新的元素清单，也不会说"没有变化"。' +
+      // 端点不支持图片时 screenshot 不在工具表里，不能指着它。
+      (includeScreenshot ? '要确认画成什么样，调用 screenshot 看。' : '你也无法确认画成什么样。'),
     input_schema: {
       type: 'object',
       properties: {
-        index: { type: 'integer', description: '在哪个元素里画，编号取自最近一次界面观测。' },
+        index: { type: 'integer', description: '在哪个元素里画。' },
         strokes: {
+          // 格式与比例含义在上面的描述里已经给了例子，schema 里不再重复。
           type: 'array',
           items: { type: 'string' } as Object,
-          description: '笔画列表。每项是一笔，内容是空格分隔的 "x,y" 比例坐标点，至少两个点。'
+          description: '笔画列表。每项是一笔，至少两个点。'
         }
       } as Object,
       required: ['index', 'strokes']
@@ -380,7 +396,8 @@ export function buildTools(includeScreenshot: boolean): ApiTool[] {
  * 刻意写进去的几件设备事实，都是实测得来、模型无法从常识推出的：
  * 锁屏期间能看不能动、剪贴板会被中文输入覆盖、返回码不可信所以用界面差异判断成败。
  */
-export function buildSystemPrompt(ownBundle: string, blacklist: string[]): string {
+export function buildSystemPrompt(ownBundle: string, blacklist: string[],
+  includeScreenshot: boolean = true): string {
   const lines: string[] = [];
   lines.push('你在操控一台真实的手机，像人一样用手指点屏幕。');
   lines.push('');
@@ -410,10 +427,20 @@ export function buildSystemPrompt(ownBundle: string, blacklist: string[]): strin
   // 这里原先列举「画布墨迹、视频内容、游戏画面、图片内容」四项。举例会让模型
   // 把清单当成穷举，遇到第五种就不往这一类里归。换成判据之后覆盖面不再受举例限制，
   // 而且这个判据模型每一轮都能自己执行 —— 它手里就有元素清单，需要时能截图。
-  lines.push('· 界面观测只看得见控件，看不见控件自己画出来的内容。怎么认：清单里找不到它、' +
-    '截图上却看得见，它就属于这一类。这类东西不会出现在观测结果里，所以观测显示' +
-    '"没有变化"不等于动作没生效；只能用 screenshot 确认，要点它用 click。');
-  lines.push('· 设备锁屏时你能读到屏幕，但所有动作都无效。这种时候任务会自动暂停等用户解锁，' +
+  // 后半句点名了 screenshot 和 click，而端点不支持图片时这两个工具都不在表里
+  // （buildTools 的同一个开关），照旧说出来就是指使模型去调不存在的工具。
+  if (includeScreenshot) {
+    lines.push('· 界面观测只看得见控件，看不见控件自己画出来的内容。怎么认：清单里找不到它、' +
+      '截图上却看得见，它就属于这一类。这类东西不会出现在观测结果里，所以观测显示' +
+      '"没有变化"不等于动作没生效；只能用 screenshot 确认，要点它用 click。');
+  } else {
+    lines.push('· 界面观测只看得见控件，看不见控件自己画出来的内容（画布上的墨迹、视频画面这类）。' +
+      '这类东西不会出现在观测结果里，所以观测显示"没有变化"不等于动作没生效，' +
+      '而这个端点不支持看图，你无法确认它们，只能按动作已经生效来推进。');
+  }
+  // 前半句原来是「你能读到屏幕」，与 Observer 的实际行为相反：锁屏时观测不采集任何元素，
+  // 只回一句「不提供屏幕内容」，screenshot 也直接拒绝。
+  lines.push('· 设备锁屏时读不到屏幕内容，动作也一律无效。这种时候任务会自动暂停等用户解锁，' +
     '不需要你反复重试。');
   // 任务开始时前台必然是本应用（用户刚在这儿打完字），于是"操作已经开着的东西"这类任务，
   // 模型第一步自然是 observe，而 guard 必然拦掉它。真机上撞过两回，只能自己猜出要先
@@ -429,7 +456,9 @@ export function buildSystemPrompt(ownBundle: string, blacklist: string[]): strin
   }
   lines.push('· 遇到需要密码、支付、删除数据这类不可逆操作时，停下来调 done 说明情况，' +
     '让用户自己决定，不要替用户做。');
-  lines.push('· 卡住了就说卡住了。反复试同一个动作没有意义，换个思路或者结束任务。');
+  // 这里原先还有一条「卡住了就说卡住了。反复试同一个动作没有意义，换个思路或者结束任务。」
+  // 删掉：上面「必须知道的设备事实」里那条工具失败的规则已经把三个选项列全了，
+  // 并且已经说过「同一个工具连续失败多次时，重复重试通常没有意义」。
   return lines.join('\n');
 }
 

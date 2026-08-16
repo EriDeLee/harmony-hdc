@@ -76,7 +76,16 @@ export function supportedKeyNames(): string[] {
   return names;
 }
 
-/** wait 的上限。改这里就要同步改 AgentTools 的 wait 描述与 AgentLoop 的夹取。 */
+/**
+ * wait 的上限。
+ *
+ * AgentTools 里 wait 的描述直接引用这个常量，所以两处不会再走偏；`AgentLoop` 那边的夹取
+ * 已经删掉了，不必同步（旧注释还写着"三者一致"，那是过期的）。
+ *
+ * 由来：早先这里是 30000 而描述写 60000，模型要求等 60 秒只等到 30 秒，回复还写着
+ * "已等待 30000 毫秒" —— **夹取了就要说**，不然模型会以为自己等够了。所以 waitMs
+ * 在截断时会在结果里附一句说明。
+ */
 export const WAIT_MAX_MS: number = 60000;
 
 /**
@@ -208,6 +217,16 @@ export interface ScreenshotResult {
 export interface AppEntry {
   bundleName: string;
   label: string;
+}
+
+/**
+ * 去掉分隔符，用来比"是不是同一串文字"。
+ *
+ * 空格、各种连字符、括号都去掉：应用常按自己的格式重排输入内容（电话号码分段、
+ * 银行卡四位一组），逐字比对会把成功的输入判成失败。
+ */
+function looseText(value: string): string {
+  return value.replace(/[\s\-\u2010-\u2015\u2212()（）]/g, '');
 }
 
 function sleep(ms: number): Promise<void> {
@@ -431,7 +450,14 @@ function pickLauncherEntry(list: LauncherEntry[]): LauncherEntry | null {
 export class DeviceControl {
   private readonly conn: HdcConnection;
   private readonly ctx: ObserveContext;
-  private readonly settings: ActionSettings;
+  /**
+   * 不是 readonly：设置页改完要能换掉它，见 `applySettings`。
+   *
+   * 曾经是 readonly，于是黑名单有了两个持有者 —— AgentLoop 查的是新配置，这一层查的是
+   * 构造时捕获的副本。用户在设置页**删掉**一个应用之后，launch_app 仍然拒绝它，
+   * 而且从界面上没有任何办法修正。
+   */
+  private settings: ActionSettings;
   private readonly log: LogSink;
   /**
    * **我们自己**最近一次读到的屏幕。每个动作后自动刷新，用来做前后对比、取屏幕尺寸、
@@ -459,6 +485,16 @@ export class DeviceControl {
     this.ctx = ctx;
     this.settings = settings;
     this.log = log;
+  }
+
+  /**
+   * 设置页改完之后换掉这一层的设置副本。
+   *
+   * 必须调，否则黑名单在这里永远是连接时那一份：加条目还能被 AgentLoop 的闸门挡住
+   * （它查的是新配置），但**删条目**这一层不知道，会一直拒绝一个已经解禁的应用。
+   */
+  applySettings(next: ActionSettings): void {
+    this.settings = next;
   }
 
   getLastObservation(): Observation | null {
@@ -612,10 +648,10 @@ export class DeviceControl {
       return '设备已锁屏，动作不会生效。任务已自动暂停等用户解锁。';
     }
     if (obs.foregroundBundle === this.ctx.ownBundle) {
-      // 光说"禁止操作"不够用：任务刚开始时前台必然是本应用，模型第一步调 observe 就撞上
-      // 这句，然后只能自己猜出要先 launch_app。真机上撞过两回，各白费一个回合。
-      return '当前前台是本应用自身，禁止操作，以免中断 agent 自己的连接。' +
-        '要操作哪个应用，先用 launch_app 把它切到前台。';
+      // 这句原先还带「以免中断 agent 自己的连接」和「先用 launch_app 把它切到前台」。
+      // 两半都已在缓存的系统提示词里：一条讲任务开头前台必然是本应用、要先把目标应用
+      // 切到前台，一条讲绝对不要操作本应用。这里只留最短的事实陈述。
+      return '当前前台是本应用自身，禁止操作。';
     }
     if (this.isBlacklisted(obs.foregroundBundle)) {
       return `应用 ${obs.foregroundBundle} 在黑名单中，禁止操作。`;
@@ -904,16 +940,36 @@ export class DeviceControl {
     if (typeof source === 'string') {
       return { ok: false, detail: source, observation: this.lastObservation };
     }
-    const seen = this.lastObservation as Observation;
-    const destRemembered = findByIndex(seen, toIndex);
+    // 目标编号**不能**在 lastObservation 里查。resolveTarget 刚刚把它换成了一份新
+    // dump（见它内部的 observeOnce），而模型报的 to_index 属于它见过的那张表，也就是
+     // shownObservation。查错了表，编号对上的会是另一个元素，拖到哪儿全凭运气。
+    const shown = this.shownObservation;
+    if (shown === null) {
+      return { ok: false, detail: '还没有任何观测结果，请先调用 observe。', observation: this.lastObservation };
+    }
+    const destRemembered = findByIndex(shown, toIndex);
     if (destRemembered === null) {
-      return { ok: false, detail: `目标编号 ${toIndex} 不在当前观测结果中。`, observation: seen };
+      return {
+        ok: false,
+        detail: `目标编号 ${toIndex} 不在上一次发给你的清单里。请重新 observe 后再操作。`,
+        observation: this.lastObservation
+      };
+    }
+    // 和 from 一样，位置要取新界面里的：编号来自旧表，坐标必须来自现在的屏幕。
+    const fresh = this.lastObservation as Observation;
+    const dest = resolveElement(destRemembered, fresh);
+    if (dest === null) {
+      return {
+        ok: false,
+        detail: `目标编号 ${toIndex}（${flatLabel(destRemembered.label)}）在当前界面已经不存在，界面可能已经变化。请重新 observe。`,
+        observation: fresh
+      };
     }
     const command =
       `uitest uiInput drag ${source.centerX} ${source.centerY} ` +
-        `${destRemembered.centerX} ${destRemembered.centerY} 600`;
-    this.log(`[agent] 拖拽 ${source.label} → ${destRemembered.label}`);
-    return await this.injectAndReport(command, seen, '拖拽');
+        `${dest.centerX} ${dest.centerY} 600`;
+    this.log(`[agent] 拖拽 ${source.label} → ${dest.label}`);
+    return await this.injectAndReport(command, fresh, '拖拽');
   }
 
   // ---------- 自由绘制 ----------
@@ -1012,7 +1068,9 @@ export class DeviceControl {
       notes.push(`其中有段被拒绝: ${failures.join(' / ')}`);
     }
     // 墨迹在画布节点内部，界面树里看不到，所以这里不拿界面差异当成败依据。
-    notes.push('墨迹不会出现在界面树里，界面树没变化不代表没画上。要确认效果请调用 screenshot。');
+    // 这是同一条规则的第三份（前两份在系统提示词和 draw 的描述里），按 NO_CHANGE_TEXT
+    // 那条注释定下的规矩，in-history 只留最短一句，枚举和补救留给缓存前缀。
+    notes.push('墨迹不在界面树里，要确认效果请 screenshot。');
     return { ok: true, detail: notes.join('\n'), observation: after };
   }
 
@@ -1086,9 +1144,30 @@ export class DeviceControl {
     return { ok: true, detail: diff, observation: after };
   }
 
+  /**
+   * 刚输入的文字有没有落在界面上。
+   *
+   * 三个来源都要比，而且要**忽略分隔符**：
+   *
+   * - `rawText` 是未打码原文。只比 `text` 的话，输入身份证或银行卡号永远比不上 ——
+   *   那两类会被 maskSensitive 改写。
+   * - 忽略空格与连字符，因为**应用会按自己的格式重排输入**。真机实测（联系人应用的
+   *   电话字段）：输入一串 11 位数字，框里显示成 3-4-4 分段、中间带两个空格，逐字比对
+   *   必然失配。当时的后果是工具报「未能确认输入」，模型照着重输一遍，然后花六个回合
+   *   用 click / backspace 去修那个被输了两次的框。
+   *
+   * 判据本身不放宽：uitest 的成功返回码不可信，确认不到就得如实说没生效。这里改的
+   * 只是"怎么算同一串文字"。
+   */
   private containsText(obs: Observation, text: string): boolean {
+    const loose = looseText(text);
     for (const e of obs.elements) {
-      if (e.label.indexOf(text) >= 0 || e.text.indexOf(text) >= 0) {
+      if (e.label.indexOf(text) >= 0 || e.text.indexOf(text) >= 0 ||
+        e.rawText.indexOf(text) >= 0) {
+        return true;
+      }
+      if (loose.length > 0 && (looseText(e.label).indexOf(loose) >= 0 ||
+        looseText(e.rawText).indexOf(loose) >= 0)) {
         return true;
       }
     }
@@ -1396,11 +1475,6 @@ export class DeviceControl {
   }
 
   /**
-   * 上限必须与 AgentTools 里 wait 的描述、以及 AgentLoop 的夹取值三者一致。
-   * 早先这里是 30000 而描述写 60000，模型要求等 60 秒只等到 30 秒，
-   * 回复还写着"已等待 30000 毫秒"—— 夹取了就要说，不然模型会以为自己等够了。
-   */
-  /**
    * 请求取消。两条中断路径都走这里：用户按「停止」，以及屏幕看守发现该停了。
    *
    * 做两件事：
@@ -1444,16 +1518,21 @@ export class DeviceControl {
         observation: this.lastObservation
       };
     }
+    const before = this.shownObservation;
     const obs = await this.observeOnce();
     this.lastObservation = obs;
-    // wait 之所以也发整张表：等的就是屏幕自己变（下载完、短信到），等完编号很可能已经变了。
-    if (!obs.locked) {
-      this.shownObservation = obs;
-    }
     const note = capped < ms ? `（请求 ${ms} 毫秒，已按上限 ${WAIT_MAX_MS} 截断）` : '';
+    // 等的就是屏幕自己变（下载完、短信到），**变了**编号很可能也变了，所以要发整张新表。
+    // 但没变的时候不发 —— 而"还没等到"恰恰是 wait 最常见的结局，之前每次都把一整张表
+    // （上千字符）重发一遍，说的却是"和你手里那张一模一样"。走 reportAndRemember 之后，
+    // 没变就只回一句、模型手里那张继续有效，和其他所有动作的口径一致。
+    //
+    // 第一次调 wait 时还没有"模型看过的那张表"（比如任务一上来就等），那时没有可比的
+    // 基准，照旧发整张。
+    const body = before === null ? renderObservation(obs) : this.reportAndRemember(before, obs);
     return {
       ok: true,
-      detail: `已等待 ${capped} 毫秒。${note}\n${renderObservation(obs)}`,
+      detail: `已等待 ${capped} 毫秒。${note}\n${body}`,
       observation: obs
     };
   }

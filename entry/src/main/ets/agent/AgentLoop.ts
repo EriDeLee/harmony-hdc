@@ -14,6 +14,7 @@ import type {
   DeviceControl, ActionResult, ScreenshotResult, AppEntry, ScreenGuardTick
 } from './DeviceControl';
 import { MIN_SCREEN_OFF_MS, CANCEL_REASON } from './DeviceControl';
+import { setSpansEnabled } from './Observer';
 import type {
   AnthropicClient, ApiMessage, ApiBlock, ApiTool, ApiResult,
   ContentPart, SendOptions, StreamSink
@@ -62,6 +63,10 @@ export interface AgentSnapshot {
   totalInput: number;
   totalOutput: number;
   totalCached: number;
+  // 这里曾加过一个 imagesRejected，把「端点不支持图片」这件事写进存盘。**已撤回。**
+  // 存盘里只放会话内容（消息、计划、用量），端点能力不属于会话 —— 用户随时可以在设置里
+  // 换端点，把上一个端点的毛病带到下一个端点上是错的。代价是恢复后要再撞一次 400
+  // 才重新学会，那一次的成本远小于把判断记错。
 }
 
 export interface LoopLimits {
@@ -126,6 +131,14 @@ interface ToolOutcome {
 }
 
 /**
+ * 截图画面被拿掉之后留在历史里的那行字。
+ *
+ * 三个地方会拿掉画面：存盘快照、端点拒图、旧截图裁剪。原先各写一套理由，
+ * 但模型对这三种成因做不出任何不同的反应，所以统一成一句。
+ */
+const SHOT_DROPPED_TEXT: string = '（上面那张截图的画面已移除。）';
+
+/**
  * 用户点「继续」之后回给模型的话。
  *
  * 不放行那个待执行的动作，而是把发生的事告诉模型，让它自己导航回去。
@@ -169,8 +182,16 @@ export class AgentLoop {
    * 重试、改计划还是收摊，由模型自己决定。
    */
   private consecutiveToolFailures: number = 0;
-  /** 本轮是否已经因为屏幕原因中断过，避免重复发事件。 */
-  private interrupted: boolean = false;
+  /**
+   * 屏幕原因要求的暂停。非空表示「在等用户回来」，内容是暂停理由。
+   *
+   * 用它而不是 `stopRequested`：熄屏和锁屏都是用户暂时不看了，不是要放弃任务。
+   * 循环在下一个检查点看到它就走和前台失配同一套暂停流程，用户点继续之后接着做。
+   * 真正的终止只由 `stop()` 触发，也就是用户按停止按钮那一条路。
+   *
+   * 同时兼作去重标志：非空时看守再拍也不会重复发事件。
+   */
+  private pauseForScreen: string = '';
   private guardTimer: number = -1;
   private totalInput: number = 0;
   private totalOutput: number = 0;
@@ -230,7 +251,10 @@ export class AgentLoop {
       const blocks: ApiBlock[] = [];
       for (const block of msg.content) {
         if (block.type === 'image') {
-          blocks.push({ type: 'text', text: '（上面那张截图的画面已移除：会话存盘不保存图片数据。）' });
+          // 不写移除原因。三处占位原先各写一套理由（存盘不保存图片 / 端点不支持图片 /
+          // 只剩说明文字），而模型无法据此做任何事；折叠提示词引用这类占位时也只泛指
+          // 「只剩这行说明」。端点不支持图片另有一条可执行的告知，见 sendOnce 里那条。
+          blocks.push({ type: 'text', text: SHOT_DROPPED_TEXT });
         } else {
           blocks.push(block);
         }
@@ -281,6 +305,8 @@ export class AgentLoop {
     this.totalCached = snap.totalCached;
     this.lastContextTokens = 0;
     this.screenshotSeq = AgentLoop.maxScreenshotSeq(this.messages);
+    // 不从存盘恢复 imagesRejected：那是端点的能力，不是会话的内容。它作为内存字段在本次
+    // 运行内自然延续（pumpGuarded 会照它同步 setSpansEnabled），应用重启后重新学。
     this.hooks.onUsage(this.totalInput, this.totalOutput, this.totalCached);
     this.reportProgress();
   }
@@ -322,8 +348,17 @@ export class AgentLoop {
    * 用户改完模型或黑名单后会毫无提示地继续用旧值。
    */
   applyConfig(config: AgentConfig): void {
+    // 端点或模型换了，上一个端点的能力判断就作废。
+    //
+    // 存盘方向已经不带 imagesRejected 了（端点能力不属于会话内容），内存方向同样要清：
+    // 否则在 DeepSeek 上撞过一次 400 之后换回 Anthropic，screenshot 和 click 仍然缺席、
+    // 提示词仍是「你无法确认它们」那一版、行尾纵向位置也还关着，要重启应用才恢复。
+    if (config.endpoint !== this.config.endpoint || config.model !== this.config.model) {
+      this.imagesRejected = false;
+      setSpansEnabled(true);
+    }
     this.config = config;
-    this.systemPrompt = buildSystemPrompt(this.ownBundle, config.blacklistBundles);
+    this.systemPrompt = buildSystemPrompt(this.ownBundle, config.blacklistBundles, !this.imagesRejected);
   }
 
   isRunning(): boolean {
@@ -358,7 +393,15 @@ export class AgentLoop {
     }
     this.running = true;
     this.stopRequested = false;
-    this.interrupted = false;
+    this.pauseForScreen = '';
+    // 这两个计数器都是**按任务**计的，必须跟着新任务清零。
+    //
+    // 之前没清，而任务做完之后再发消息走的是 continueWith、永远不回到这里，于是：
+    // 第二个任务的第一次失败被报成「连续第 N+1 次」，模型据此放弃一个它还没试过的路子；
+    // 追问预算也早在第一个任务里花完了，第二个任务的第一次 done 若有未完成项会被直接
+    // 接受，剩下的计划项被静默标成已放弃、不再追问。
+    this.consecutiveToolFailures = 0;
+    this.todos.resetReminders();
     this.messages = [userMessage([textBlock(task)])];
     this.lastContextTokens = 0;
     this.screenshotSeq = 0;
@@ -383,7 +426,7 @@ export class AgentLoop {
     }
     this.running = true;
     this.stopRequested = false;
-    this.interrupted = false;
+    this.pauseForScreen = '';
     // 中断可能停在「已发出 tool_use、还没回 tool_result」的位置上。
     // 不补齐就续聊，服务端会因为 tool_use 没有配对结果直接 400。
     // 补齐块必须与用户这句话合成**同一条** user 消息：角色必须交替，
@@ -398,6 +441,9 @@ export class AgentLoop {
   /** 起跑前的屏幕检查 + 全程看守，两个入口共用。 */
   private async pumpGuarded(): Promise<void> {
     this.device.clearCancel();
+    // 行尾纵向位置这一列跟着 click 的存亡走。imagesRejected 是跨轮保持的，
+    // 所以这里按它同步一次，而不是无条件打开。
+    setSpansEnabled(!this.imagesRejected);
     try {
       const state = await this.device.quickState();
       if (state.locked) {
@@ -445,7 +491,7 @@ export class AgentLoop {
       }
       this.device.screenGuardTick().then((tick: ScreenGuardTick) => {
         if (tick.ok && tick.shouldStop) {
-          this.interruptForScreen(tick.reason);
+          this.requestScreenPause(tick.reason);
         }
       }).catch((err: Error) => {
         this.emit('notice', `屏幕看守这一拍失败: ${err.message}`);
@@ -514,8 +560,12 @@ export class AgentLoop {
       repair.push({
         type: 'tool_result',
         tool_use_id: id,
-        content: '这一步没有执行：任务在此处被中断（屏幕熄灭或设备锁屏）。',
-        is_error: true
+        // 与 pump 里那处补齐用同一句话、同一个标志。原先这里写「被中断（屏幕熄灭或
+        // 设备锁屏）」并标 is_error: true，而 pump 那处写「暂停了」标 false ——
+        // 同一件事两种说法、两个相反的标志，模型被告知它既是失败又不是失败。
+        // 原因断言也去掉了：走到这里也可能是用户按了停止，或者进程被系统杀掉。
+        content: '这一步没有执行：任务在这里停下了。',
+        is_error: false
       });
     }
     this.emit('notice', `已为中断处 ${repair.length} 个未完成的工具调用补上结果，以便继续。`);
@@ -546,6 +596,15 @@ export class AgentLoop {
     while (!this.stopRequested) {
       // 折叠自己要发一次请求，失败就停下：继续发只会撞上同一个超限。
       if (!await this.maybeCompact()) {
+        // 折叠那一发被屏幕暂停打断时，任务没有失败，只是要等人回来。结清之后
+        // 重新走一圈，折叠会再试一次。
+        if (this.pauseForScreen.length > 0) {
+          if (!await this.settleScreenPause()) {
+            this.emit('notice', '已停止。');
+            return;
+          }
+          continue;
+        }
         // 折叠中途被用户按停时不算失败，走和别处一致的停止提示。
         if (this.stopRequested) {
           this.emit('notice', '已停止。');
@@ -562,6 +621,16 @@ export class AgentLoop {
         this.emit('notice', '已停止。');
         return;
       }
+      // 屏幕暂停必须在错误分支之前结清。请求是被我们自己 abort 的，落到下面就会被
+      // 当成「请求失败」报错并终止任务 —— 而它其实只是用户熄屏了。
+      if (this.pauseForScreen.length > 0) {
+        if (!await this.settleScreenPause()) {
+          this.emit('notice', '已停止。');
+          return;
+        }
+        this.resumeAfterPause();
+        continue;
+      }
       if (!result.ok || result.turn === null) {
         // 这里曾有一条「上下文超限就压缩后重试」的分支。**不要加回来。**
         //
@@ -576,6 +645,11 @@ export class AgentLoop {
           // 端点不支持图片块（已知 DeepSeek 如此）。摘掉截图能力后重试，而不是让任务死掉。
           this.imagesRejected = true;
           this.dropImageBlocks();
+          // click 跟着 screenshot 一起摘掉，所以行尾那一列纵向位置也没人消费了，关掉。
+          setSpansEnabled(false);
+          // 系统提示词里有两处点名 screenshot / click，也得跟着重建，否则模型会被
+          // 指使去调不在工具表里的工具。
+          this.systemPrompt = buildSystemPrompt(this.ownBundle, this.config.blacklistBundles, false);
           this.emit('notice', '这个端点不支持图片，已关闭截图能力并继续。');
           continue;
         }
@@ -595,8 +669,30 @@ export class AgentLoop {
         turn.usage.cacheReadInputTokens +
         turn.usage.outputTokens;
 
+      // 被 max_tokens 截断的回复**不能进历史**，也不能拿去执行。
+      //
+      // 截断落在 tool_use 上时，参数 JSON 是残缺的，assistantTurnToBlocks 会把它变成
+      // 空对象，于是模型收到一句「参数不是合法的 JSON」—— 而它压根没写完。落在 thinking
+      // 上时更糟：那个块没有签名，原样回传必然被服务端 400，整条会话就卡死在这里。
+      // stopReason 是唯一能提前识别的信号，之前解析了却没人读。
+      if (turn.stopReason === 'max_tokens') {
+        this.emit('error', '模型回复超过 max_tokens 上限');
+        return;
+      }
+
       // thinking 与 signature 必须原样回传，否则下一轮 400。这一步不可省。
-      this.messages.push({ role: 'assistant', content: assistantTurnToBlocks(turn) });
+      const turnBlocks = assistantTurnToBlocks(turn);
+      // 空内容的 assistant 消息**绝不能进历史**。
+      //
+      // 两种流会产出空数组：一条 content block 都没有的流，以及唯一的文本块最终为空
+      // （content_block_start 先塞了 text: ''，后面没有任何 text_delta）。这两种情况
+      // result.ok 都是真，所以不挡就会推进去。而它一旦进了历史，此后每一次请求都 400，
+      // 并且已经被存盘写进会话文件 —— 从界面上没有任何办法恢复那段对话。
+      if (turnBlocks.length === 0) {
+        this.emit('error', '模型这一轮没有返回任何内容。');
+        return;
+      }
+      this.messages.push({ role: 'assistant', content: turnBlocks });
 
       for (const part of turn.parts) {
         if (part.kind === 'thinking' && part.text.length > 0) {
@@ -623,8 +719,13 @@ export class AgentLoop {
 
       const resultBlocks: ApiBlock[] = [];
       let finished = false;
-      for (const call of calls) {
-        if (this.stopRequested) {
+      let halfway = -1;
+      for (let ci = 0; ci < calls.length; ci++) {
+        const call = calls[ci];
+        // 屏幕暂停也要在这里刹住。一轮里模型常常连着给好几个动作，用户熄屏之后
+        // 继续把剩下的动作打出去，就是在他看不见的时候接着点屏幕。
+        if (this.halted()) {
+          halfway = ci;
           break;
         }
         if (call.toolName === TOOL_DONE) {
@@ -647,6 +748,8 @@ export class AgentLoop {
             this.emit('finished', summary);
             this.hooks.onProgress(100, this.todos.summary());
             finished = true;
+            // done 后面若还跟着别的 tool_use，它们也得配上结果，见循环外那段补齐。
+            halfway = ci + 1;
             break;
           }
           resultBlocks.push({
@@ -676,6 +779,28 @@ export class AgentLoop {
         }
       }
 
+      // 提前跳出循环时，**没轮到的那几个 tool_use 必须当场补上结果**。
+      //
+      // 不能指望 danglingToolResults 事后补：它只看最后一条消息是不是 assistant，
+      // 而这里紧接着就要把已执行的那几条结果作为 user 消息推进去，最后一条就不是
+      // assistant 了，它会返回空数组。漏掉的那些 tool_use 就永远配不上结果，
+      // 下一发请求直接 400，任务在恢复的第一步就死。
+      //
+      // 两种提前跳出都要覆盖，别只想着暂停那一种：模型把 done 和别的动作放在同一轮
+      // 时，done 之后那几个调用同样落单。所以 halfway 由每个 break 各自设好，
+      // 这里只负责按它补齐。
+      if (halfway >= 0) {
+        for (let ri = halfway; ri < calls.length; ri++) {
+          resultBlocks.push({
+            type: 'tool_result',
+            tool_use_id: calls[ri].toolId,
+            content: finished ?
+              '这一步没有执行：任务已经在上一个调用里结束了。' :
+              '这一步没有执行：任务在这里停下了。',
+            is_error: false
+          });
+        }
+      }
       // 收尾前也要把结果推进历史，否则末尾会留下没有配对结果的 tool_use。
       if (resultBlocks.length > 0) {
         this.appendUserBlocks(resultBlocks);
@@ -687,6 +812,15 @@ export class AgentLoop {
       if (this.stopRequested) {
         this.emit('notice', '已停止。');
         return;
+      }
+      // 工具循环因为熄屏刹住时在这里结清，不要留到下一圈开头 —— 下一圈第一件事是
+      // maybeCompact，它自己会发一次请求，那等于在用户看不见的时候还在花钱。
+      if (this.pauseForScreen.length > 0) {
+        if (!await this.settleScreenPause()) {
+          this.emit('notice', '已停止。');
+          return;
+        }
+        this.resumeAfterPause();
       }
     }
     this.emit('notice', '已停止。');
@@ -705,7 +839,7 @@ export class AgentLoop {
       const kept: ApiBlock[] = [];
       for (const block of msg.content) {
         if (block.type === 'image') {
-          kept.push(textBlock('（上面那张截图的画面已移除：当前端点不支持图片。）'));
+          kept.push(textBlock(SHOT_DROPPED_TEXT));
         } else {
           kept.push(block);
         }
@@ -743,6 +877,19 @@ export class AgentLoop {
         // 撞同一个墙"用的，被打断一次就加一笔会污染它。也不清零：暂停之前若真在连续
         // 失败，那个事实没有因为一次暂停而消失。
         this.resumedFromPause = false;
+        // 但期望前台**必须**在这里补回来。两处暂停都把它清成空串，注释都写着「由恢复后的
+        // 第一个动作重新确立」—— 而那第一个动作正是走这条提前返回的，于是基准要等到
+        // 第二个动作才建立。中间那一整轮里 checkGates 的 `expectedBundle.length > 0`
+        // 不成立，前台守卫等于关闭：用户此时拿回手机，agent 会接着点他的屏幕。
+        if (!outcome.isError) {
+          this.syncExpectedBundle(call.toolName);
+        }
+        return outcome;
+      }
+      // 熄屏或锁屏正在要求暂停时，闸门会拒掉这个动作（`checkGates` 里那条锁屏分支）。
+      // 那同样不是「这一步失败了」，不能记进连续失败次数 —— 否则用户熄一次屏，
+      // 模型下一轮就被告知"连续第 N 次失败"，据此去改计划或者收摊。
+      if (this.pauseForScreen.length > 0) {
         return outcome;
       }
       if (outcome.isError) {
@@ -758,6 +905,11 @@ export class AgentLoop {
       // 那个次数是给模型判断「是不是一直在撞同一个墙」用的，被停一次就加一笔会污染它。
       if (message.indexOf(CANCEL_REASON) >= 0) {
         this.emit('notice', `${call.toolName} 已取消。`);
+        return { text: this.toolFailureText(call.toolName, message), isError: true, imageBase64: '' };
+      }
+      // 抛出来的错也要认暂停。熄屏时系统把应用降频，一条 dumpLayout 很容易超时抛错，
+      // 那是熄屏的连带后果，不是模型撞墙，同样不能计进连续失败次数。
+      if (this.pauseForScreen.length > 0) {
         return { text: this.toolFailureText(call.toolName, message), isError: true, imageBase64: '' };
       }
       this.consecutiveToolFailures += 1;
@@ -799,6 +951,12 @@ export class AgentLoop {
     // 「用户让停」不是「这一步失败了」。此时任务即将结束，不能给出重试建议 ——
     // 那会让续聊时的历史里留下一句「建议你重试」，而用户的意思正相反。
     if (message.indexOf(CANCEL_REASON) >= 0) {
+      // 取消有两种来路，说法不能混。熄屏/锁屏那种任务还会继续，说成「任务被要求停止、
+      // 不要重试」就与紧随其后的 RESUME_NOTICE（"用户刚点了继续"）当场矛盾。
+      // 这里只说清发生了什么，该怎么接着做由 RESUME_NOTICE 讲。
+      if (this.pauseForScreen.length > 0) {
+        return `工具 ${toolName} 没做完就停下了：屏幕熄灭或设备锁屏。这不是失败。`;
+      }
       return `工具 ${toolName} 被取消：${message}。这不是失败，是任务被要求停止，不要重试。`;
     }
     lines.push(`工具 ${toolName} 没有执行成功：${message}`);
@@ -1047,6 +1205,10 @@ export class AgentLoop {
     }
     this.screenshotSeq += 1;
     return {
+      // 这里曾经改成不带前台身份，理由是 res.detail 那份观测开头已经有。**已撤回。**
+      // click 正是为「不在界面树里的目标」准备的，那种目标点下去界面树往往没变化，
+      // res.detail 就只是一句「没有变化」，里面并没有前台身份。而截图迟早会被裁掉，
+      // 只剩这行说明 —— 身份必须写在这行里，否则那一轮的历史里就再也找不到它。
       text: `${res.detail}\n${this.captionShot()}`,
       isError: false,
       imageBase64: shot.base64
@@ -1091,8 +1253,9 @@ export class AgentLoop {
   private async checkGates(): Promise<string> {
     const state = await this.device.quickState();
     if (state.locked) {
-      this.interruptForScreen('设备已锁屏');
-      return '设备已锁屏，任务中断。';
+      // 不放行这个动作，同时请求暂停。循环回到检查点就会等用户解锁后继续。
+      this.requestScreenPause('设备已锁屏');
+      return '设备已锁屏，动作没有执行。任务已暂停等你解锁。';
     }
     // 「目标页面还在不在最上面」必须**新鲜地**读，但完整观测要 1.2~2.2 秒，
     // 每个动作前都读一次太贵。所以先用焦点窗口 id 当筛子：
@@ -1135,21 +1298,68 @@ export class AgentLoop {
   }
 
   /**
-   * 锁屏一律中断，不再等解锁。
+   * 屏幕熄灭或锁屏：立刻停手，但不终止任务。
    *
-   * 旧行为是「唤亮屏幕、请用户解锁、等到解锁或超时」，其中主动唤亮屏幕这一步
-   * 与「用户看不见就停」的规则正面冲突：用户熄屏本身就是要它停手。
+   * 「立刻」是必须的 —— 用户已经看不见了，不能继续替他点屏幕，所以中止在途请求、
+   * 取消在途命令。但不置 `stopRequested`：熄屏是「先放一放」，不是「别做了」。
+   * 循环会在下一个检查点走 `settleScreenPause`，和前台被抢走时同一套暂停流程。
+   *
+   * 不主动唤亮屏幕。那与「用户看不见就停」正面冲突：熄屏本身就是要它停手。
    */
-  private interruptForScreen(reason: string): void {
-    if (this.interrupted) {
+  private requestScreenPause(reason: string): void {
+    if (this.pauseForScreen.length > 0) {
       return;
     }
-    this.interrupted = true;
-    this.stopRequested = true;
+    this.pauseForScreen = reason;
     this.api.abort();
-    // 长等待会分片检查这个标记，否则一觉睡完之前中断根本落不了地。
+    // 长等待会分片检查这个标记，否则一觉睡完之前取消根本落不了地。
     this.device.requestCancel();
-    this.emit('interrupted', `${reason}，任务已中断。发消息可以接着上次继续。`);
+  }
+
+  /** 循环里的任何检查点：停止和屏幕暂停都算「不能往下做了」。 */
+  private halted(): boolean {
+    return this.stopRequested || this.pauseForScreen.length > 0;
+  }
+
+  /**
+   * 结清一次屏幕暂停：问用户要不要继续，等他回来。
+   *
+   * 返回 false 表示用户选择放弃。走到这里时人必然已经解锁并回到本应用（不然点不到
+   * 那个继续按钮），所以不需要再轮询屏幕状态。
+   */
+  private async settleScreenPause(): Promise<boolean> {
+    const reason = this.pauseForScreen;
+    if (reason.length === 0) {
+      return true;
+    }
+    this.emit('paused', `${reason}，已暂停。`);
+    const go = await this.hooks.waitForResume(`${reason}，要继续吗？`);
+    this.pauseForScreen = '';
+    // 暂停期间置过取消标记，不清掉的话恢复后第一条命令会当场被自己取消。
+    this.device.clearCancel();
+    if (!go) {
+      this.stopRequested = true;
+      return false;
+    }
+    this.emit('notice', '已继续。');
+    // 与前台失配那条路一致：两个基准都清空，由恢复后的第一个动作重新确立。
+    // 用户点继续时人正看着本应用，屏幕早已不是暂停那一刻的样子。
+    this.lastFocusWindowId = '';
+    this.expectedBundle = '';
+    this.resumedFromPause = true;
+    return true;
+  }
+
+  /**
+   * 暂停结清之后把历史接回可发送的状态。
+   *
+   * 中止在途请求可能停在「已发出 tool_use、还没回 tool_result」的位置，不补齐会 400；
+   * 再附一句 RESUME_NOTICE 告诉模型它被暂停过、上一个动作可能没执行。
+   */
+  private resumeAfterPause(): void {
+    const blocks = this.danglingToolResults();
+    blocks.push(textBlock(RESUME_NOTICE));
+    this.appendUserBlocks(blocks);
   }
 
   private describeCall(name: string, args: ToolArgs): string {
@@ -1323,7 +1533,10 @@ export class AgentLoop {
       enablePromptCache: false
     };
     const result = await this.api.send(options, sink);
-    if (this.stopRequested) {
+    // 屏幕暂停也会 abort 这一发请求。不在这里挡住的话，它会被当成「压缩失败」报错，
+    // 而报错文案还会说成是用户停的；更糟的是折叠失败会让 pump 直接返回，任务就此死掉 ——
+    // 用户只是熄了屏。挡住之后 pump 会照常走到结清点，等他回来重新折叠。
+    if (this.stopRequested || this.pauseForScreen.length > 0) {
       return '';
     }
     if (!result.ok || result.turn === null) {
@@ -1458,7 +1671,7 @@ export class AgentLoop {
         //
         // 只陈述事实，不加建议。写"可以再截一次"是骗它做办不到的事（那是当时的画面），
         // 写"再截也拍不回来"又是在教它一件它没问的常识。
-        kept.unshift(textBlock('（上面那张截图的画面已移除，只剩说明文字。）'));
+        kept.unshift(textBlock(SHOT_DROPPED_TEXT));
         touched = true;
       }
       if (touched) {
