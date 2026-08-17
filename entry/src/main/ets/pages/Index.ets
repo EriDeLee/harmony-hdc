@@ -197,6 +197,31 @@ const AGENT_SESSION_SAVE_DELAY_MS: number = 2000;
  */
 const AGENT_STICK_MS: number = 8000;
 /**
+ * 追加一条消息之后盯落点多久。
+ *
+ * 比 `AGENT_STICK_MS` 短两个数量级，因为要盯的事完全不同：这里等的只是**一条新子项的
+ * 布局**（一帧的量级），不是"应用从后台回来、整页内容从零布局出来"（实测五秒）。
+ * 开长了反而有害 —— 窗口开着时 `onAreaChange` 的键盘补偿会主动让位（见那里的注释），
+ * 而任务跑起来消息是一条接一条的，长窗口等于把键盘补偿常态性地关掉。
+ */
+const AGENT_FOLLOW_STICK_MS: number = 400;
+/**
+ * 追加消息后补贴落点的两拍（毫秒）。
+ *
+ * **为什么光靠盯底窗口不够。** 窗口的驱动是 `onReachEnd` / `onScrollIndex`
+ * （见 timelinePage 那几个回调）。页面刚进入时它们必然触发 —— 内容从空变满，
+ * 子项大量进出视区。但"在底部追加一条"这个时机不一样：新那条整个落在折叠线下面时，
+ * 可见范围的首尾下标都没变、列表也不在末尾，两个回调**一个都不来**，窗口就白开了。
+ *
+ * 所以补两拍不依赖任何回调的定时。60ms 约三四帧，足够一条子项完成布局；
+ * 200ms 是保底。两拍都以盯底窗口为判据（`agentStickPage` / `agentStickUntil`），
+ * 所以用户一拖（`onWillScroll` 撤掉窗口）这两拍自动作废。
+ *
+ * 这**不是**被删掉的那套 `pendingLand` 重试机制：没有"判定到位"、没有"试几次就放弃"，
+ * 也不自己决定该落在哪 —— 落哪、还该不该落，全由窗口说话。
+ */
+const AGENT_FOLLOW_CATCHUP_MS: number[] = [60, 200];
+/**
  * 只有开关、没有说明文字的那一格的高度。
  * 取 48 是为了和「标题 13 + 说明 11 + 行距」那种两行格子视觉重量相当；
  * 字号在这个高度里自适应放大，不会显得空。
@@ -492,10 +517,31 @@ struct Index {
    * 所以这一下必须补，而且必须落在页面**真正可见**的那一刻（`onPageShow`）——
    * 在后台里滚是空操作。
    *
-   * **只由自动回页那条路置位。** 用户自己把应用切后台又切回来时不置位，
-   * 否则他正翻在历史上方就会被拽到底部。
+   * 两条路置位：
+   *
+   * 1. 自动回页（`returnToAgentPage`，任务跑完应用自己把人拉回来）。
+   * 2. **后台期间真有新内容追加**（`pushTimeline` 发现页面不可见时置位）。
+   *
+   * 第 2 条是 2026-08-17 加的。这里原先写着「只由自动回页那条路置位，用户自己切后台
+   * 又切回来时不置位，否则他正翻在历史上方就会被拽到底部」—— 那条把"任务还在跑、
+   * 用户自己切回来"整个漏掉了：三条回页的路里只有它没人摆位置，而任务在后台一直追加，
+   * 回来就停在离开前那个偏移上。用户报的原话是「在会话运行中的时候切回 agent 依然会
+   * 出现之前的不在底部的情况」。
+   *
+   * 判据取的是「后台期间**真有新内容**」而不是「离开前贴不贴底」：
+   * 页面开着时只要在看最新那段就会跟到底，切后台不该换一套规则。代价是离开前翻在
+   * 历史上方、期间又真来了新消息时同样会被带到底部 —— 与页面开着时一致，用户拍板接受。
+   * 没有新内容时绝不动位置。
    */
   private agentLandBottomOnShow: boolean = false;
+  /**
+   * 页面此刻是不是**真的**在屏幕上（`onPageShow` 置上、`onPageHide` 撤下）。
+   *
+   * 不能用 `showAgentPage` 代替：那个只表示"应用内选中的是 AGENT 页"，
+   * 用户按 Home 之后它仍然是 true，而那时 `scrollEdge` 是空操作。
+   * 两者的差别正是上面那个缺口的成因。
+   */
+  private agentPageVisible: boolean = false;
   /**
    * 每一页的时间线是否已经贴到上下边缘。只有贴边时的继续拉动才算翻会话。
    *
@@ -706,6 +752,10 @@ struct Index {
   }
 
   onPageShow(): void {
+    // 必须在下面任何 return 之前置上：应用启动时这里也会走一遍，而那时 showAgentPage
+    // 还是 false，早退之后这个标记就永远是 false，`pushTimeline` 会把每一条都当成
+    // "页面不可见"，于是页面开着的时候反而不跟随了。
+    this.agentPageVisible = true;
     // 用户可能刚去系统设置改了字号再回来，行高得重新量。
     this.measureInputMaxHeight();
     if (this.showPowerPage && this.connected) {
@@ -725,7 +775,22 @@ struct Index {
     if (this.agentLandBottomOnShow) {
       this.agentLandBottomOnShow = false;
       this.snapToEdge(this.agentViewIdx < 0 ? 0 : this.agentViewIdx, Edge.Bottom);
+      // 上面那一发几乎总是无效的（内容还没布局出来），真正管用的是这个窗口。
+      // `returnToAgentPage` 自己也开一段，两处重复开是无害的：armStick 只是把
+      // 截止时间往后推，盯的还是同一页同一边。而用户自己切回来的那条路上没有别人开，
+      // 少了它就等于只剩那一发无效的滚动 —— 正是这次要修的症状。
+      this.armStick(this.livePageIdx(), Edge.Bottom);
     }
+  }
+
+  /**
+   * 页面离开屏幕。只撤 `agentPageVisible` 一个标记，别的什么都不做。
+   *
+   * 不在这里记"离开前贴不贴底"：`agentEdgeBottom` 一直由滚动回调维护着，
+   * 到这一刻它已经是对的，再抄一份只会多一个可能过期的副本。
+   */
+  onPageHide(): void {
+    this.agentPageVisible = false;
   }
 
   private async restoreConnection(): Promise<void> {
@@ -966,12 +1031,31 @@ struct Index {
     next.push({ id: this.agentSeq, kind, text });
     this.agentLiveTimeline = next;
     if (this.viewingLatest() && this.showAgentPage) {
-      // **新消息自动跟到底就是这一句。** 删掉 `stackFromEnd` 之后它是唯一的跟随机制了
+      if (!this.agentPageVisible) {
+        // 应用在后台：这一下滚不动（空操作），所以改成记一笔账，等页面真可见时补。
+        // 不补的后果就是用户报的那个 bug —— 任务在后台追加了几十条，切回来还停在
+        // 离开前那个偏移上。见 `agentLandBottomOnShow`。
+        this.agentLandBottomOnShow = true;
+        return;
+      }
+      // **新消息自动跟到底就是这三句。** 删掉 `stackFromEnd` 之后它是唯一的跟随机制了
       // （那个属性的契约 ② 会在插入时把上方内容往上顶，效果一样，但它捆着不要的契约 ①）。
       //
       // 不带动画：`scrollEdge` 在 List 上默认无动画，正好合用。要是带动画，
       // 每来一条新消息都会播一段滚动，一个任务几十条就是一串抽动。
-      this.snapToEdge(this.livePageIdx(), Edge.Bottom);
+      //
+      // **光第一句是不够的，它永远差最后那一条。** 上一行刚把数组换掉，新那条子项此刻
+      // 还没被测量，`scrollEdge` 只能滚到**追加之前**的底部。运行中看不出来 ——
+      // 下一条消息又把上一条顶进视野；只有**最后**那一条会一直留在折叠线下面。
+      // 用户报的就是这个：按停止之后「已停止。」要往下滑才看得到。
+      // （按停止那条路还专门跳过了 `returnToAgentPage`，所以也没有别人来补落点。）
+      //
+      // 所以再开一段很短的盯底窗口 + 补两拍定时，等新子项真的布局出来再贴一次。
+      // 两者的分工写在 `AGENT_FOLLOW_CATCHUP_MS` 的注释里：窗口是判据，定时是驱动。
+      const live = this.livePageIdx();
+      this.snapToEdge(live, Edge.Bottom);
+      this.armStickAtLeast(live, Edge.Bottom, AGENT_FOLLOW_STICK_MS);
+      this.catchUpFollow(live);
     }
   }
 
@@ -1921,10 +2005,49 @@ struct Index {
    * 原先它只管活跃页、只管底部，叫 `stickBottomIfWanted`。翻会话时目标页也要摆位置，
    * 而且往下翻要摆到**开头**，所以推广成任意页、任意边。
    */
-  private armStick(idx: number, edge: Edge): void {
+  private armStick(idx: number, edge: Edge, ms: number = AGENT_STICK_MS): void {
     this.agentStickPage = idx;
     this.agentStickEdge = edge;
-    this.agentStickUntil = Date.now() + AGENT_STICK_MS;
+    this.agentStickUntil = Date.now() + ms;
+  }
+
+  /**
+   * 开窗口，但**只延长、不缩短**。
+   *
+   * 追加消息那条路要用它，不能直接用 `armStick`：进页面 / 从后台回来时开的是 8 秒窗口
+   * （内容从零布局出来实测要五秒），而任务一跑，消息一条接一条地来。每条都用 400ms
+   * 覆盖一次的话，那 8 秒窗口在第一条消息到达时就被砍成 400ms —— 五秒后才完成的布局
+   * 再也等不到落点，"从后台回来停在最上方"那个 bug 就换个形式回来了。
+   *
+   * 只在盯的是同一页同一边时才让步。页面变了或要盯的边变了（往上翻要盯开头），
+   * 最新那次请求必须赢，那是 `armStick` 原来的语义。
+   */
+  private armStickAtLeast(idx: number, edge: Edge, ms: number): void {
+    const until = Date.now() + ms;
+    if (idx === this.agentStickPage && edge === this.agentStickEdge &&
+      this.agentStickUntil > until) {
+      return;
+    }
+    this.armStick(idx, edge, ms);
+  }
+
+  /**
+   * 追加一条消息之后，补两拍不依赖回调的落点。理由见 `AGENT_FOLLOW_CATCHUP_MS`。
+   *
+   * 判据完全借用盯底窗口：只要窗口还开着、盯的还是这一页，就再贴一次。
+   * 于是"用户自己动手了"这一种不必在这里重新判断 —— `onWillScroll` 撤窗口时
+   * 这两拍就一起失效了。
+   */
+  private catchUpFollow(idx: number): void {
+    for (const ms of AGENT_FOLLOW_CATCHUP_MS) {
+      setTimeout(() => {
+        if (idx !== this.agentStickPage || this.agentStickUntil === 0 ||
+          Date.now() >= this.agentStickUntil) {
+          return;
+        }
+        this.snapToEdge(idx, this.agentStickEdge);
+      }, ms);
+    }
   }
 
   /** 布局相关的回调都调它。不是在盯的那一页就什么都不做。 */

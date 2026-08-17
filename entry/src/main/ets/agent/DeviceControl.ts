@@ -15,7 +15,7 @@ import { KeyCode } from '@kit.InputKit';
 import type { HdcConnection, LogSink } from '../hdc/HdcConnection';
 import type { ObserveContext, Observation, ObservedElement, Rect } from './Observer';
 import {
-  NO_CHANGE_TEXT, findByIndex, flatLabel, observe, renderObservation, reportAfterAction,
+  NO_CHANGE_TEXT, clockLine, findByIndex, flatLabel, observe, renderObservation, reportAfterAction,
   resolveElement, sameObservation
 } from './Observer';
 
@@ -721,8 +721,24 @@ export class DeviceControl {
     const text = reportAfterAction(before, after);
     if (text !== NO_CHANGE_TEXT) {
       this.shownObservation = after;
+      return this.withClock(text);
     }
     return text;
+  }
+
+  /**
+   * 给一张要发出去的表拼上时间那行。**只在这一层拼，不在渲染层。**
+   *
+   * 渲染出来的文本同时是「界面树有没有变」的判据（`reportAfterAction` 拿前后两份
+   * 逐字符比），而时间每分钟都变 —— 掺进去等于让那句「没有变化」永远不出现，
+   * 每个动作都要重发整张表（实测一张表上千字符）。所以比对用不带时间的那份，
+   * 发出去的这份才带。
+   *
+   * 「没有变化」那一句不拼时间：它不是表头，而且拼上去会让同一句话每次都不同，
+   * 白占历史里的位置。日期在动作之间不会变，模型下一次拿到表时自然会看到新的时间。
+   */
+  private withClock(table: string): string {
+    return `${clockLine()}\n${table}`;
   }
 
   // ---------- 观测 ----------
@@ -746,14 +762,14 @@ export class DeviceControl {
     this.lastObservation = obs;
     if (obs.locked) {
       // 锁屏时不输出任何元素，这张表没有编号可用，不能记成"模型看过的表"。
-      return { ok: true, detail: renderObservation(obs), observation: obs };
+      return { ok: true, detail: this.withClock(renderObservation(obs)), observation: obs };
     }
     const blocked = this.guard(obs);
     if (blocked !== null) {
       return { ok: false, detail: blocked, observation: obs };
     }
     this.shownObservation = obs;
-    return { ok: true, detail: renderObservation(obs), observation: obs };
+    return { ok: true, detail: this.withClock(renderObservation(obs)), observation: obs };
   }
 
   /**
@@ -829,6 +845,7 @@ export class DeviceControl {
     const px = Math.round(clampUnit(xRatio) * before.screenWidth);
     const py = Math.round(clampUnit(yRatio) * before.screenHeight);
     const box = target.bounds;
+    let outsideNote = '';
     if (px < box.left || px > box.right || py < box.top || py > box.bottom) {
       // 光说"不在编号 N 里"不够用：模型还得自己猜该填几，实测因此白跑两三轮。
       // 我们手里有完整元素表，直接把那个点真正落在哪个元素里说出来。
@@ -849,23 +866,43 @@ export class DeviceControl {
           host = e;
         }
       }
-      let hint = '那里没有任何元素。';
       if (host !== null) {
         const seenHost = this.shownObservation === null ?
           null : resolveElement(host, this.shownObservation);
-        hint = seenHost !== null ?
+        const hint = seenHost !== null ?
           `它落在编号 ${seenHost.index}（${flatLabel(seenHost.label)}）里。` :
           `它落在「${flatLabel(host.label)}」上，那个元素不在你手里这张清单上。请重新 observe。`;
+        return {
+          ok: false,
+          detail: `${xRatio},${yRatio} 不在编号 ${index}（${flatLabel(target.label)}）里。${hint}没有点下去。`,
+          observation: before
+        };
       }
-      return {
-        ok: false,
-        detail: `${xRatio},${yRatio} 不在编号 ${index}（${flatLabel(target.label)}）里。${hint}没有点下去。`,
-        observation: before
-      };
+      // 那一块**没有任何元素**：没有可点错的东西，拦下来只是白拦。
+      //
+      // 这条曾经也拒。实测代价（日历待办）：模型报 0.12,0.654 = (151,1779)，
+      // 那正是勾选圈的圆心（圆图形 114~186，圆心 150，它偏 1 像素），
+      // 而圈子自己不在清单上，行元素从 x=221 才开始，于是这一拒把**唯一正确的答案**
+      // 判成错的。模型照着拒绝语把 x 挪到 0.5 落进行里 —— 点开了「编辑日程」。
+      // 三轮都是这样，用户的原话是「我让它勾选，他死活点不到那个圆圈」。
+      //
+      // index 这道校验要挡的是"报的坐标和报的元素互相矛盾"这种粗错（历史上挡住过一次
+      // 点到标题栏）。而"那里什么元素都没有"不构成矛盾，只说明那是画出来的东西 ——
+      // 那恰恰是 click 存在的理由。所以照点，并在回报里说清它在框外。
+      outsideNote = `${xRatio},${yRatio} 在编号 ${index}（${flatLabel(target.label)}）外面，` +
+        '那个位置没有任何元素，已按你给的坐标点下去。\n';
     }
     const command = `uitest uiInput click ${px} ${py}`;
-    this.log(`[agent] 画面点击 ${target.label} 比例${xRatio},${yRatio} @${px},${py}`);
-    return await this.injectAndReport(command, before, '画面点击');
+    this.log(
+      `[agent] 画面点击 ${target.label} 比例${xRatio},${yRatio} @${px},${py}` +
+      `${outsideNote.length > 0 ? ' [框外空白]' : ''}`
+    );
+    const res = await this.injectAndReport(command, before, '画面点击');
+    if (outsideNote.length === 0 || !res.ok) {
+      return res;
+    }
+    // 注入成功才说"已经点下去了"；失败时 detail 是失败原因，前面再加一句会自相矛盾。
+    return { ok: true, detail: `${outsideNote}${res.detail}`, observation: res.observation };
   }
 
   // ---------- 滑动与拖拽 ----------
@@ -1529,7 +1566,10 @@ export class DeviceControl {
     //
     // 第一次调 wait 时还没有"模型看过的那张表"（比如任务一上来就等），那时没有可比的
     // 基准，照旧发整张。
-    const body = before === null ? renderObservation(obs) : this.reportAndRemember(before, obs);
+    // 这一支自己拼时间：reportAndRemember 那一支在里面拼过了，这里是没有基准可比的
+    // 第一次 wait，走的是裸渲染。
+    const body = before === null ?
+      this.withClock(renderObservation(obs)) : this.reportAndRemember(before, obs);
     return {
       ok: true,
       detail: `已等待 ${capped} 毫秒。${note}\n${body}`,

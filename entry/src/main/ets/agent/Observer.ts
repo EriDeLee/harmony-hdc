@@ -330,6 +330,27 @@ function buildLabel(node: LayoutNode): string {
   if (id.length > 0) {
     return `#${id}`;
   }
+  // 到这里为止四个字段全空。历史上这一类整个丢掉，于是**画出来的按钮**从不进清单。
+  //
+  // 实测（日历应用待办行，真机转储）：勾选圈是
+  // `Stack [78,1710][221,1853] click=true`，里面只有一个 `Circle` 图形，
+  // text / description / hint / id 全空 —— 它不在清单上，所以 `tap` 够不到；
+  // 模型只能改用 `click` 报坐标，报的是 x=0.12（151 像素，圆心 150，偏 1 像素），
+  // 而那个点在行元素 `[221,1744][1156,1820]` 外面，又被 `clickInside` 的边界校验拦下，
+  // 于是它把 x 挪到 0.5 落进行里 —— 每次都点开「编辑日程」。用户看到的就是
+  // 「让它勾选，它死活点不到那个圆圈」。
+  //
+  // 顺带解释一个不对称：勾上之后圈里多一个 `✓`，那时靠上提后代文本就有标签了，
+  // 所以**只有没勾的时候**它是隐形的。
+  //
+  // 所以可点节点在这里不丢，给一个中性名字，模型至少能 tap 它。
+  // 只给**内部没有别的可点节点**的那些：可点容器套着可点子项时，子项才是它想点的东西，
+  // 给容器起名等于凭空多一个"点在中心"的假目标 —— 那正是 skipBorrowedContainer
+  // 当初要挡的故障（点进列表正中间那条错误便签）。
+  if (aClickable(node) && !hasClickableDescendant(node)) {
+    const kind = aType(node);
+    return kind.length > 0 ? `（无文字·${kind}）` : '（无文字）';
+  }
   return '';
 }
 
@@ -537,9 +558,33 @@ export function buildObservation(rawJson: string, ctx: ObserveContext): Observat
     throw new Error('布局树为空，设备可能未就绪');
   }
 
-  const rootRect = parseRect(aBounds(windows[0]));
-  const screenW = rootRect !== null ? rootRect.right : 0;
-  const screenH = rootRect !== null ? rootRect.bottom : 0;
+  // 屏幕多大：取**所有窗口延伸到的最远边**，不取数组第一个。
+  //
+  // 「数组第一个」正是 decisions.md 那条已经被否掉的做法（"选哪个窗口当屏幕" → 面积优先，
+  // 被否选项里第一个就是"数组第一个"）。当时只改了选窗口这一处，这两行漏了，
+  // 同一个错误基准又留了一份。它要是发作，后果不是小偏差：状态栏窗口是
+  // `[0,0][1260,188]`，它排第一时 screenH 就是 188 —— collect 的裁剪框只剩顶上一条，
+  // 整张清单塌成状态栏那几个字；clickInside 又把 y 比例乘 188，每次点击都落在屏幕最顶。
+  //
+  // 存档实测：180 份真机转储里第一个窗口**全都**是整屏 1260x2720，所以这个错从未发生过。
+  // 改它是为了让基准和已有决定同源，不是在修一个正在发生的故障。
+  //
+  // 为什么不用"面积最大的那个窗口的 bounds"（那样和选窗口逐字同源）：应用被摆进分屏或
+  // 悬浮窗时它就是半块屏，而截图始终是整屏，模型的比例必须对着整屏。最远边不吃这个亏。
+  let screenW = 0;
+  let screenH = 0;
+  for (const w of windows) {
+    const r = parseRect(aBounds(w));
+    if (r === null) {
+      continue;
+    }
+    if (r.right > screenW) {
+      screenW = r.right;
+    }
+    if (r.bottom > screenH) {
+      screenH = r.bottom;
+    }
+  }
 
   const locked = detectLocked(windows);
 
@@ -831,6 +876,30 @@ export function findByIndex(obs: Observation, index: number): ObservedElement | 
  * 必须留在原地。留最短的一句，枚举和补救手段交给系统提示。
  */
 export const NO_CHANGE_TEXT: string = '界面树没有变化（不代表动作没生效）。';
+
+/**
+ * 表头最前面那行时间。
+ *
+ * 由来是一次真机故障：任务说「在日历**明天**里新增一个九点的待办」，模型点的是
+ * **今天**那一格（`tap 42` = 17 号，而设备日期就是 17 号），内容和时间都设对了，
+ * 日子错了。查下来提示词里从头到尾没有任何日期或时间 —— 「今天/明天/昨天」对它
+ * 只能靠猜。上一段任务猜对过（昨天 = 16），是因为日历打开时表头就写着今天几号，
+ * 它往前数了一格；这一段要往后数一格，它没数。
+ *
+ * **这一行绝不能进 `renderObservation`。** 「界面树没有变化」是靠比对渲染后的文本
+ * 判定的（见 `reportAfterAction`），时间每分钟都变，掺进去那句话就永远不会出现，
+ * 每个动作都得重发整张表。所以它由 `DeviceControl` 在**发给模型之前**拼上去，
+ * 比对用的始终是不带时间的那份。
+ *
+ * 精度到分钟：秒是噪声。带星期是因为「下周一」这类说法要用。
+ */
+export function clockLine(): string {
+  const week: string[] = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+  const d = new Date();
+  const pad = (n: number): string => n < 10 ? `0${n}` : `${n}`;
+  return `现在 ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${week[d.getDay()]} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 /**
  * 动作做完回给模型的正文：界面变了就给**整张带编号的新表**，没变就只说一句。
