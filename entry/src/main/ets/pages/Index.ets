@@ -338,6 +338,18 @@ interface BundleItem {
   checked: boolean;
 }
 
+/** fieldRow 的参数包。@Builder 按值传参不响应状态变化，必须走单对象字面量
+ *  的引用传递（ArkUI 官方规则），否则 host/port 异步恢复后输入框仍显示初值。 */
+interface FieldRowOptions {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  enabled: boolean;
+  inputType: InputType;
+  /** false = 外观正常但触摸穿透（Version 只读用）。缺省可编辑。 */
+  touchable?: boolean;
+}
+
 /** 时间线上的一条。kind 决定颜色与前缀，与 AgentEventKind 一一对应。 */
 interface TimelineItem {
   id: number;
@@ -679,6 +691,10 @@ struct Index {
   private terminalFlushPending: boolean = false;
   private terminalScrollPending: boolean = false;
   private terminalStickToBottom: boolean = true;
+  // 日志面板的贴底跟随，与终端面板同一套（stick 标记 + 延迟 scrollEdge）。
+  private logScroller: Scroller = new Scroller();
+  private logScrollPending: boolean = false;
+  private logStickToBottom: boolean = true;
   private powerScrollToken: number = 0;
 
   aboutToAppear(): void {
@@ -841,6 +857,24 @@ struct Index {
     }
   }
 
+  /**
+   * host/port 编辑即存（fire-and-forget）。就两个短字符串，不需要防抖——
+   * 每键直写，被杀进程也不丢。值不完整（清空到一半 / port 非法）时跳过本轮，
+   * 避免把毒数据写成下次的恢复源。
+   */
+  private persistConnectionFields(): void {
+    try {
+      const host = this.host.trim();
+      const port = Number.parseInt(this.port.trim(), 10);
+      if (host.length === 0 || Number.isNaN(port) || port < 1 || port > 65535) {
+        return;
+      }
+      saveConnection(this.getCtx(), host, port);
+    } catch (err) {
+      // 忽略：保存失败时本次改动不落盘，下次成功编辑会再写
+    }
+  }
+
   private async restoreBundleCache(): Promise<void> {
     try {
       this.bundleCache = await loadBundleSystemMap(this.getCtx());
@@ -868,6 +902,30 @@ struct Index {
   private appendLog(line: string): void {
     const next = this.logs.concat([line]);
     this.logs = next.length > MAX_LOG_LINES ? next.slice(next.length - MAX_LOG_LINES) : next;
+    this.scrollLogToBottomIfNeeded();
+  }
+
+  /** 与终端面板同款：在底部时跟着新日志往下滚，用户往上翻就不打扰。 */
+  private scrollLogToBottomIfNeeded(): void {
+    if (this.viewMode === 'logs' && this.logStickToBottom) {
+      this.scrollLogToBottom();
+    }
+  }
+
+  private scrollLogToBottom(): void {
+    if (this.logScrollPending) {
+      return;
+    }
+    this.logScrollPending = true;
+    setTimeout(() => {
+      try {
+        this.logScroller.scrollEdge(Edge.Bottom);
+      } catch (err) {
+        // 日志面板可能未挂载（功能视图下追加日志）
+      } finally {
+        this.logScrollPending = false;
+      }
+    }, TERMINAL_SCROLL_DELAY_MS);
   }
 
   private async refreshKeyState(): Promise<void> {
@@ -965,11 +1023,8 @@ struct Index {
         this.setupTerminalColumns();
         this.appendLog(`[shell] 已打开交互式 shell (channel=${this.shell.channelId})`);
         await this.createAgent(conn);
-        try {
-          await saveConnection(this.getCtx(), options.host, options.port);
-        } catch (err) {
-          this.appendLog(`[cfg] 保存连接配置失败: ${(err as BusinessError).message}`);
-        }
+        // host/port 的持久化已改为编辑即存（persistConnectionFields），
+        // 这里不再「连接成功才存」。
       } else {
         this.status = outcome.message;
         await conn.close();
@@ -3457,15 +3512,19 @@ struct Index {
   // ---------- Builders ----------
 
   @Builder
-  fieldRow(label: string, value: string, onChange: (v: string) => void, enabled: boolean, inputType: InputType) {
+  fieldRow(cfg: FieldRowOptions) {
     Row() {
-      Text(label).fontSize($r('sys.float.ohos_id_text_size_body2')).width(72).fontColor($r('app.color.text_secondary'));
-      TextInput({ text: value })
+      Text(cfg.label).fontSize($r('sys.float.ohos_id_text_size_body2')).width(72).fontColor($r('app.color.text_secondary'));
+      TextInput({ text: cfg.value })
         .fontSize(INPUT_FONT_SIZE)
         .layoutWeight(1)
-        .enabled(enabled)
-        .type(inputType)
-        .onChange(onChange);
+        .enabled(cfg.enabled)
+        .type(cfg.inputType)
+        // touchable=false：外观/灰态与其他行完全同步（enabled 随连接状态走），
+        // 仅 focusable=false 拒绝获焦——不弹键盘即不可编辑。不用禁用态恒灰，
+        // 也不用 HitTestMode.None（真机实测拦不住输入框的点击获焦）。
+        .focusable(cfg.touchable !== false)
+        .onChange(cfg.onChange);
     }
     .width('100%')
     .margin({ bottom: 8 });
@@ -3577,7 +3636,8 @@ struct Index {
 
   @Builder
   logPanel() {
-    Scroll() {
+    // 贴底跟随与终端面板同一套：用户亲手滚动就停止跟随，重新触底则恢复。
+    Scroll(this.logScroller) {
       Column() {
         ForEach(this.logs, (line: string, index: number) => {
           Text(line)
@@ -3596,7 +3656,19 @@ struct Index {
     .backgroundColor($r('app.color.log_background'))
     .borderRadius(12)
     .padding(10)
-    .align(Alignment.TopStart);
+    .align(Alignment.TopStart)
+    .onWillScroll((_xOffset: number, _yOffset: number, _state: ScrollState, source: ScrollSource) => {
+      if (source === ScrollSource.DRAG || source === ScrollSource.FLING ||
+        source === ScrollSource.OTHER_USER_INPUT || source === ScrollSource.SCROLL_BAR ||
+        source === ScrollSource.SCROLL_BAR_FLING) {
+        this.logStickToBottom = false;
+      }
+    })
+    .onScrollEdge((side: Edge) => {
+      if (side === Edge.Bottom) {
+        this.logStickToBottom = true;
+      }
+    });
   }
 
   // 下面四行右端那个 `›` 的 22fp 是**故意写死的**，不是漏改。
@@ -5081,7 +5153,7 @@ struct Index {
               .borderRadius(12)
               .margin({ top: 12 })
               .textAlign(TextAlign.Start)
-              .backgroundColor(this.installResultOk ? '#34C759' : '#E8404A');
+              .backgroundColor(this.installResultOk ? '#34C759' : Color.Red);
           }
         }
         .width('100%')
@@ -5116,10 +5188,12 @@ struct Index {
         .width('100%')
         .margin({ bottom: 12 });
 
-      this.fieldRow('Host', this.host, (v: string) => { this.host = v; }, !this.connected, InputType.Normal);
-      this.fieldRow('Port', this.port, (v: string) => { this.port = v; }, !this.connected, InputType.Number);
-      this.fieldRow('Version', this.version, (v: string) => { this.version = v; }, !this.connected, InputType.Normal);
-      this.fieldRow('HostName', this.hostName, (v: string) => { this.hostName = v; }, !this.connected, InputType.Normal);
+      this.fieldRow({ label: 'Host', value: this.host, onChange: (v: string) => { this.host = v; this.persistConnectionFields(); }, enabled: !this.connected, inputType: InputType.Normal });
+      this.fieldRow({ label: 'Port', value: this.port, onChange: (v: string) => { this.port = v; this.persistConnectionFields(); }, enabled: !this.connected, inputType: InputType.Number });
+      // 协议版本是约定值（用户拍板不可编辑）：enabled 与其他行同步（连上变灰），
+      // 仅 touchable=false 不获焦。version 状态保持 DEFAULT_VERSION 供 buildOptions。
+      this.fieldRow({ label: 'Version', value: this.version, onChange: (_v: string) => {}, enabled: !this.connected, inputType: InputType.Normal, touchable: false });
+      this.fieldRow({ label: 'HostName', value: this.hostName, onChange: (v: string) => { this.hostName = v; }, enabled: !this.connected, inputType: InputType.Normal });
 
       Row() {
         Button(this.connected ? '断开' : '连接')

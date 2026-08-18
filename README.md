@@ -4,7 +4,9 @@
 
 2.0 版本更新了「AGENT 操控」：把这套 shell 能力交给大模型，用一句话驱动它自己操作这台手机。
 
-- 包名 `com.lee.hdc` · 版本 `2.0.0`
+2.0.1 新增「安装 HAP」：从手机上选 .hap 安装包，直接装进所连设备。
+
+- 包名 `com.lee.hdc` · 版本 `2.0.1`
 - HarmonyOS，`compatibleSdkVersion 6.1.0(23)` / `targetSdkVersion 6.1.1(24)`
 - 仅手机，无第三方依赖
 
@@ -45,7 +47,7 @@
 
 - 应用列表 `bm dump -a -l`，系统应用判定用 `xargs -P16` 在设备侧并发跑 `bm dump -n <pkg>`，判定结果缓存到 Preferences
 - 清数据 `bm clean -n '<pkg>' -d`，包一层退出码 marker，非 0 直接抛错
-- 装 HAP：FILE 通道（WAKEUP→CHECK→BEGIN→DATA(12288B/帧)→FINISH 握手，帧序列经真机探针验证）推到 `/data/local/tmp/<6位随机字母>.hap` → `bm install -r -p` → `rm -f`，传输/安装/清理各带独立结果上报
+- 装 HAP：FILE 通道（WAKEUP→CHECK→BEGIN→DATA(32KB/帧，16 帧滑动窗口)→FINISH 握手，帧序列经真机探针验证）推到 `/data/local/tmp/<6位随机字母>.hap` → `bm install -r -p` → `rm -f`，传输/安装/清理各带独立结果上报
 - 电源 `power-shell suspend` / `power-shell setmode 600..603` / `power-shell timeout -o <ms>` / `power-shell timeout -r`
 - 每次改电源设置后回读 `hidumper -s PowerManagerService -a "-s"` 校验是否真的生效
 
@@ -121,6 +123,7 @@ entry/src/main/ets/
 ## 已知限制
 
 - 设备要求 `AUTH_ENCRYPT`（TLS-PSK 加密信道）时直接失败，未实现
+- 安装 HAP 只在本机实测过，真跨设备（连另一台手机装包）未验证
 - 命令输入框关不掉输入法自动大写，试过多种方案均无效
 - UI 文案全部硬编码中文，没做多语言
 - 私钥以 PEM 明文存在应用沙箱的 Preferences 里，依赖沙箱隔离，没有额外加密
