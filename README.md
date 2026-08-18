@@ -17,7 +17,7 @@
 <br>主页 · 握手与鉴权日志
 </td>
 <td align="center" width="33%">
-<img src="screenshots/02-features.webp" width="300" alt="功能页深色主题，列出终端、清空应用数据、电源控制、AGENT 操控四个入口">
+<img src="screenshots/02-features.webp" width="300" alt="功能页深色主题，列出终端、安装 HAP、清空应用数据、电源控制、AGENT 操控五个入口">
 <br>功能页 · 深色主题
 </td>
 <td align="center" width="33%">
@@ -35,7 +35,8 @@
 
 | 入口 | 做什么 |
 | --- | --- |
-| 终端 | 全屏交互式 shell，支持 Ctrl+C、流式输出、UTF-8 跨帧解码 |
+| 终端 | 交互式 shell，支持 Ctrl+C、流式输出、UTF-8 跨帧解码、回显模拟与宽列设置 |
+| 安装 HAP | 系统选择器挑 .hap（或文件管理器里直接点开），经 FILE 通道传到所连设备 → `bm install -r` → 自动清理；本地/远程设备同一条路 |
 | 清空应用数据 | 列出全部应用，多选后用 `bm clean` 清数据 |
 | 电源控制 | 熄屏、电源挡位（普通/省电/性能/超级省电）、屏幕超时 |
 | AGENT 操控 | 说一句要做什么，大模型自己看屏幕、点按滑动、拉起应用，直到做完 |
@@ -44,6 +45,7 @@
 
 - 应用列表 `bm dump -a -l`，系统应用判定用 `xargs -P16` 在设备侧并发跑 `bm dump -n <pkg>`，判定结果缓存到 Preferences
 - 清数据 `bm clean -n '<pkg>' -d`，包一层退出码 marker，非 0 直接抛错
+- 装 HAP：FILE 通道（WAKEUP→CHECK→BEGIN→DATA(12288B/帧)→FINISH 握手，帧序列经真机探针验证）推到 `/data/local/tmp/<6位随机字母>.hap` → `bm install -r -p` → `rm -f`，传输/安装/清理各带独立结果上报
 - 电源 `power-shell suspend` / `power-shell setmode 600..603` / `power-shell timeout -o <ms>` / `power-shell timeout -r`
 - 每次改电源设置后回读 `hidumper -s PowerManagerService -a "-s"` 校验是否真的生效
 
@@ -89,8 +91,8 @@ Host、Port 和系统应用判定缓存会存到 Preferences，下次进来自�
 
 ```
 entry/src/main/ets/
-├─ entryability/EntryAbility.ts     UIAbility，只负责 loadContent
-├─ pages/Index.ets                  全部 UI（主页 + 终端/清数据/电源/AGENT 四个全屏浮层）
+├─ entryability/EntryAbility.ts     UIAbility：loadContent + 接收「点 .hap 打开」的 want.uri
+├─ pages/Index.ets                  全部 UI（主页 + 终端/安装 HAP/清数据/电源/AGENT 五个全屏浮层）
 ├─ agent/
 │  ├─ AgentLoop.ts                  一轮轮的对话循环、工具分发、上下文压缩
 │  ├─ AnthropicClient.ts            SSE 流式解析、thinking 块原样回传、缓存标记
@@ -110,8 +112,10 @@ entry/src/main/ets/
    ├─ HdcSettings.ts                连接参数与系统应用判定缓存
    ├─ HdcConnection.ts              TCP、握手鉴权状态机、帧路由
    ├─ HdcShellChannel.ts            交互式 shell 通道
+   ├─ HdcFileChannel.ts             FILE 通道：向所连设备推文件（帧序列真机探针验证）
+   ├─ TerminalEmulator.ts           80 列行式终端模拟：消化 mksh 重画回显的控制码
    ├─ HdcUnityCommandChannel.ts     一次性命令通道
-   └─ BundleManager.ts              bm 封装：列表、系统应用分类、清数据
+   └─ BundleManager.ts              bm 封装：列表、系统应用分类、清数据、装 HAP 三段
 ```
 
 ## 已知限制

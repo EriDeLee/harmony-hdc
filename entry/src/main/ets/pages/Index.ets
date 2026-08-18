@@ -2,18 +2,21 @@ import { common } from '@kit.AbilityKit';
 import { KeyboardAvoidMode, window } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { notificationManager } from '@kit.NotificationKit';
+import { picker, fileUri, fileIo } from '@kit.CoreFileKit';
 import { HdcConnection, AuthResult, AuthOutcome, ConnectOptions } from '../hdc/HdcConnection';
+import { FILE_CHUNK_BYTES } from '../hdc/HdcFileChannel';
 import { DEFAULT_VERSION } from '../hdc/HdcTypes';
 import { generateKeyPair, HdcKeyPair } from '../hdc/HdcCrypto';
 import { hasKeyPair, loadKeyPair, saveKeyPair, clearKeyPair } from '../hdc/HdcKeyStore';
 import { HdcShellChannel } from '../hdc/HdcShellChannel';
+import { TerminalEmulator } from '../hdc/TerminalEmulator';
 import {
   loadConnection,
   saveConnection,
   loadBundleSystemMap,
   saveBundleSystemMap
 } from '../hdc/HdcSettings';
-import { listBundles, clearBundleData, BundleEntry, ListBundlesResult } from '../hdc/BundleManager';
+import { listBundles, clearBundleData, installHapFromUri, BundleEntry, ListBundlesResult, HapInstallResult } from '../hdc/BundleManager';
 import { DeviceControl, ActionSettings } from '../agent/DeviceControl';
 import { ObserveContext } from '../agent/Observer';
 import {
@@ -41,6 +44,15 @@ const MAX_OUTPUT_BUFFER_CHARS: number = 32000;
 const MAX_OUTPUT_RENDER_CHARS: number = 16000;
 const TERMINAL_FLUSH_DELAY_MS: number = 80;
 const TERMINAL_SCROLL_DELAY_MS: number = 16;
+/**
+ * 终端逻辑列宽。**必须与 onConnect 发给 shell 的 `COLUMNS=` 同值**，两处共用本常量。
+ *
+ * daemon 开 PTY 从不设 winsize，mksh 行编辑器回退 80 列并对超宽命令横向滚动——
+ * 回显只剩最后 79 列的窗口 + `<` 标记（2026-08-18 真机实测，完整链条见
+ * doc/terminal-echo.md）。设备没有 stty 改不了内核 winsize，但 mksh 尊重
+ * COLUMNS shell 变量（同样真机实测：设 200 后 155 列命令完整回显、无 `<`）。
+ */
+const TERMINAL_COLUMNS: number = 200;
 
 type ViewMode = 'logs' | 'tools';
 
@@ -353,6 +365,18 @@ struct Index {
   @State showTerminalPage: boolean = false;
   @State showClearPage: boolean = false;
   @State showPowerPage: boolean = false;
+  @State showInstallPage: boolean = false;
+  // ---------- 安装 HAP ----------
+  @State hapUri: string = '';
+  @State hapDisplayName: string = '';
+  @State hapSizeText: string = '';
+  @State hapRealPath: string = '';
+  @State installBusy: boolean = false;
+  @State installPhaseText: string = '';
+  @State installResultOk: boolean = false;
+  @State installResultText: string = '';
+  /** 待装文件的字节大小（setPendingHap 时 stat 得到）。 */
+  private hapFileSize: number = -1;
   @State bundles: BundleItem[] = [];
   @State bundlesLoaded: boolean = false;
   @State includeSystem: boolean = false;
@@ -646,8 +670,12 @@ struct Index {
   private agentResume: ((go: boolean) => void) | null = null;
   private bundleCache: Map<string, boolean> = new Map();
   private terminalScroller: Scroller = new Scroller();
-  private terminalOutputText: string = '';
-  private terminalOutputTruncated: boolean = false;
+  /** 终端回显模拟器：宽度与连接时下发的 COLUMNS 同值（TERMINAL_COLUMNS）。 */
+  private terminal: TerminalEmulator = new TerminalEmulator(TERMINAL_COLUMNS, MAX_OUTPUT_BUFFER_CHARS);
+  /** 列宽设置命令的回显吞咽状态（见 setupTerminalColumns）。 */
+  private terminalColumnsSwallowing: boolean = false;
+  private terminalColumnsSwallow: string = '';
+  private terminalColumnsTimer: number = -1;
   private terminalFlushPending: boolean = false;
   private terminalScrollPending: boolean = false;
   private terminalStickToBottom: boolean = true;
@@ -752,6 +780,14 @@ struct Index {
   }
 
   onPageShow(): void {
+    // 「从文件管理器点 .hap 用本应用打开」的入口：EntryAbility 把 want.uri 存进
+    // AppStorage，这里消费。取走即清空，避免下次 onPageShow 重复触发。
+    const pendingHap: string = AppStorage.get<string>('pendingHapUri') ?? '';
+    if (pendingHap.length > 0) {
+      AppStorage.setOrCreate<string>('pendingHapUri', '');
+      this.openInstallPage();
+      this.setPendingHap(pendingHap);
+    }
     // 必须在下面任何 return 之前置上：应用启动时这里也会走一遍，而那时 showAgentPage
     // 还是 false，早退之后这个标记就永远是 false，`pushTimeline` 会把每一条都当成
     // "页面不可见"，于是页面开着的时候反而不跟随了。
@@ -922,8 +958,11 @@ struct Index {
         this.status = `已连接 (sid=${outcome.sessionId})`;
         this.resetTerminalOutput();
         this.shell = await conn.openShell((text: string) => {
-          this.appendTerminalOutput(text);
+          this.feedTerminalOutput(text);
         });
+        // 等提示符就绪后下发列宽，并吞掉这条设置命令自己的回显
+        // （双 COLUMNS 的成因与修法见 setupTerminalColumns 的说明）。
+        this.setupTerminalColumns();
         this.appendLog(`[shell] 已打开交互式 shell (channel=${this.shell.channelId})`);
         await this.createAgent(conn);
         try {
@@ -1464,6 +1503,7 @@ struct Index {
     this.showTerminalPage = false;
     this.showClearPage = false;
     this.showPowerPage = false;
+    this.showInstallPage = false;
     this.showAgentPage = true;
     // 【试验中】这一页改用 OFFSET：键盘弹起时整页由系统平移，时间线高度不变。
     //
@@ -2331,6 +2371,8 @@ struct Index {
     if (this.shell === null) {
       return;
     }
+    // 用户插话优先于一切隐藏逻辑：列宽设置的回显若还在吞咽，立即放行
+    this.flushColumnsSwallow();
     const cmd = this.command;
     this.command = '';
     try {
@@ -2343,31 +2385,116 @@ struct Index {
   }
 
   private resetTerminalOutput(): void {
-    this.terminalOutputText = '';
-    this.terminalOutputTruncated = false;
+    this.terminal.reset();
+    if (this.terminalColumnsTimer >= 0) {
+      clearTimeout(this.terminalColumnsTimer);
+      this.terminalColumnsTimer = -1;
+    }
+    this.terminalColumnsSwallowing = false;
+    this.terminalColumnsSwallow = '';
     this.terminalFlushPending = false;
     this.terminalScrollPending = false;
     this.terminalStickToBottom = true;
     this.outputText = '';
   }
 
-  private appendTerminalOutput(text: string): void {
+  /**
+   * 回显进入模拟器，不再直接拼字符串。
+   *
+   * 旧做法把 mksh 重画长命令时的 `\r`、补位空格、`<` 标记全当文字拼进来，
+   * 长命令回显变成碎片拼接（2026-08-18 实测，见 doc/terminal-echo.md）。
+   * 模拟器按 80 列终端的语义消化这些控制码，吐出「屏幕上该有的样子」。
+   */
+  private feedTerminalOutput(text: string): void {
     if (text.length === 0) {
       return;
     }
-    if (text.length >= MAX_OUTPUT_BUFFER_CHARS) {
-      this.terminalOutputText = text.slice(text.length - MAX_OUTPUT_BUFFER_CHARS);
-      this.terminalOutputTruncated = true;
-    } else {
-      const maxPreviousLength = MAX_OUTPUT_BUFFER_CHARS - text.length;
-      if (this.terminalOutputText.length > maxPreviousLength) {
-        const previousTail = this.terminalOutputText.slice(this.terminalOutputText.length - maxPreviousLength);
-        this.terminalOutputText = previousTail + text;
-        this.terminalOutputTruncated = true;
-      } else {
-        this.terminalOutputText += text;
+    if (this.terminalColumnsSwallowing) {
+      this.terminalColumnsSwallow += text;
+      if (this.columnsSwallowDone()) {
+        this.completeColumnsSwallow();
+      }
+      return;
+    }
+    this.terminal.feed(text);
+    if (this.showTerminalPage && this.terminalStickToBottom) {
+      this.scheduleTerminalOutputFlush();
+    }
+  }
+
+  /**
+   * 连接建立后把终端列宽下发到 shell（为什么需要见 TERMINAL_COLUMNS）。
+   *
+   * 时机与显示各有一条教训：
+   * - **等第一个提示符画出来再发。** 第一版连接成功立刻发，命令抢在提示符前，
+   *   内核回显先落一行裸的 `COLUMNS=200`，mksh 行编辑器接管后又带着提示符重画
+   *   一遍——终端里出现两行 COLUMNS（2026-08-18 用户当场抓到）。
+   * - **吞掉这条命令自己的回显。** 它是内部设置不是用户输入：从发送起把回显
+   *   攒在旁边不进模拟器，直到执行完的下一个提示符出现，整段丢弃，终端从发送前
+   *   那个干净提示符继续。3 秒兜底：没等到就全部放行，宁可显示出来也不丢输出；
+   *   用户在吞咽期间插话也立即放行。
+   */
+  private async setupTerminalColumns(): Promise<void> {
+    const shell = this.shell;
+    if (shell === null) {
+      return;
+    }
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline && !this.terminal.getActiveLine().endsWith('$ ')) {
+      await new Promise<void>((resolve: () => void) => setTimeout(resolve, 50));
+    }
+    this.terminalColumnsSwallowing = true;
+    this.terminalColumnsSwallow = '';
+    this.terminalColumnsTimer = setTimeout(() => {
+      this.flushColumnsSwallow();
+    }, 3000);
+    try {
+      await shell.sendCommand(`COLUMNS=${TERMINAL_COLUMNS}`);
+    } catch (err) {
+      this.appendLog(`[shell] 设置列宽失败: ${(err as BusinessError).message}`);
+      this.flushColumnsSwallow();
+    }
+  }
+
+  /** 吞咽是否到头：攒下的字节里，最后一个换行之后恰好是新的提示符。 */
+  private columnsSwallowDone(): boolean {
+    const buf = this.terminalColumnsSwallow;
+    const idx = buf.lastIndexOf('\n');
+    return idx >= 0 && buf.substring(idx + 1) === '$ ';
+  }
+
+  private clearColumnsTimer(): void {
+    if (this.terminalColumnsTimer >= 0) {
+      clearTimeout(this.terminalColumnsTimer);
+      this.terminalColumnsTimer = -1;
+    }
+  }
+
+  /** 正常完成：攒下的只是设置命令自己的回显与执行后的新提示符，整段丢弃。 */
+  private completeColumnsSwallow(): void {
+    this.clearColumnsTimer();
+    this.terminalColumnsSwallowing = false;
+    const echoed = this.terminalColumnsSwallow;
+    this.terminalColumnsSwallow = '';
+    // 屏上保留发送前的提示符；万一它没画上（竞态兜底）补一个
+    if (echoed.length > 0 && !this.terminal.getActiveLine().endsWith('$ ')) {
+      this.terminal.feed('$ ');
+      if (this.showTerminalPage && this.terminalStickToBottom) {
+        this.scheduleTerminalOutputFlush();
       }
     }
+  }
+
+  /** 异常放行（超时/用户插话/发送失败）：把攒下的字节全部喂给模拟器，不丢输出。 */
+  private flushColumnsSwallow(): void {
+    this.clearColumnsTimer();
+    if (!this.terminalColumnsSwallowing) {
+      return;
+    }
+    this.terminalColumnsSwallowing = false;
+    const pending = this.terminalColumnsSwallow;
+    this.terminalColumnsSwallow = '';
+    this.terminal.feed(pending);
     if (this.showTerminalPage && this.terminalStickToBottom) {
       this.scheduleTerminalOutputFlush();
     }
@@ -2388,12 +2515,12 @@ struct Index {
     if (!this.showTerminalPage || !this.terminalStickToBottom) {
       return;
     }
-    let text = this.terminalOutputText;
+    let text = this.terminal.getDisplayText();
     const renderTruncated = text.length > MAX_OUTPUT_RENDER_CHARS;
     if (renderTruncated) {
       text = text.slice(text.length - MAX_OUTPUT_RENDER_CHARS);
     }
-    const rendered = (this.terminalOutputTruncated || renderTruncated) ?
+    const rendered = (this.terminal.isTruncated() || renderTruncated) ?
       `（输出过长，已仅显示最近内容）\n${text}` :
       text;
     if (this.outputText !== rendered) {
@@ -2447,6 +2574,7 @@ struct Index {
     }
     this.showClearPage = false;
     this.showPowerPage = false;
+    this.showInstallPage = false;
     this.showTerminalPage = true;
     this.terminalStickToBottom = true;
     this.flushTerminalOutput();
@@ -2463,6 +2591,7 @@ struct Index {
     }
     this.showTerminalPage = false;
     this.showPowerPage = false;
+    this.showInstallPage = false;
     this.showClearPage = true;
     if (!this.bundlesLoaded && !this.toolsBusy) {
       this.onRefreshBundles();
@@ -2480,6 +2609,7 @@ struct Index {
     }
     this.showTerminalPage = false;
     this.showClearPage = false;
+    this.showInstallPage = false;
     this.showPowerPage = true;
     this.powerPageScrolling = false;
     this.powerTimeoutSynced = false;
@@ -2490,6 +2620,230 @@ struct Index {
   private closePowerPage(): void {
     this.showPowerPage = false;
     this.powerPageScrolling = false;
+  }
+
+  // ---------- 安装 HAP ----------
+
+  /**
+   * 安装页不检查 connected：选文件不需要连接。
+   * 「从文件管理器点 .hap 打开」进来时应用多半还没连接，所以连接检查放在点安装时。
+   */
+  private openInstallPage(): void {
+    this.showTerminalPage = false;
+    this.showClearPage = false;
+    this.showPowerPage = false;
+    this.showAgentPage = false;
+    this.showInstallPage = true;
+  }
+
+  private closeInstallPage(): void {
+    this.showInstallPage = false;
+  }
+
+  /** 系统文件选择器选 .hap（无需任何权限）。 */
+  private async pickHapFile(): Promise<void> {
+    try {
+      const ctx = this.getCtx() as common.UIAbilityContext;
+      const docPicker = new picker.DocumentViewPicker(ctx);
+      const opt = new picker.DocumentSelectOptions();
+      opt.maxSelectNumber = 1;
+      opt.fileSuffixFilters = ['.hap'];
+      const uris: Array<string> = await docPicker.select(opt);
+      if (uris.length === 0) {
+        return;
+      }
+      this.setPendingHap(uris[0]);
+    } catch (err) {
+      const msg = (err as BusinessError).message ?? `${err}`;
+      this.appendLog(`[install] 选择文件失败: ${msg}`);
+      this.toast(`选择文件失败: ${msg}`);
+    }
+  }
+
+  /** 记下待安装文件：uri、显示名、真实路径（给 shell cp 用）、大小。 */
+  private setPendingHap(uri: string): void {
+    this.hapUri = uri;
+    this.installBusy = false;
+    this.installPhaseText = '';
+    this.installResultOk = false;
+    this.installResultText = '';
+    let name = uri;
+    let realPath = '';
+    try {
+      const fu = new fileUri.FileUri(uri);
+      // name/path 属性自带 ASCII 解码：uri 尾段编码过的文件名直接可读。
+      name = fu.name;
+      realPath = fu.path;
+    } catch (err) {
+      // 构造失败时退回手解 uri 尾段，路径留空（点安装时会提示先选文件）
+      const slash = name.lastIndexOf('/');
+      if (slash >= 0) {
+        name = name.substring(slash + 1);
+      }
+      try {
+        name = decodeURIComponent(name);
+      } catch (decodeErr) {
+        // 文件名本身含 % 等字符时解码失败，保留原样
+      }
+    }
+    this.hapDisplayName = name;
+    this.hapRealPath = realPath;
+    this.hapFileSize = -1;
+    let sizeText = '';
+    if (realPath.length > 0) {
+      try {
+        const stat = fileIo.statSync(realPath);
+        sizeText = this.formatHapSize(stat.size);
+        this.hapFileSize = stat.size;
+      } catch (err) {
+        sizeText = '';
+      }
+    }
+    this.hapSizeText = sizeText;
+    this.appendLog(`[install] 已选择 ${name}${sizeText.length > 0 ? `（${sizeText}）` : ''}`);
+  }
+
+  private formatHapSize(bytes: number): string {
+    if (!Number.isFinite(bytes) || bytes < 0) {
+      return '';
+    }
+    if (bytes < 1024) {
+      return `${bytes} B`;
+    }
+    const units: string[] = ['KB', 'MB', 'GB'];
+    let value = bytes;
+    let unit = -1;
+    do {
+      value /= 1024;
+      unit += 1;
+    } while (value >= 1024 && unit < units.length - 1);
+    return `${value.toFixed(value >= 100 ? 0 : 1)} ${units[unit]}`;
+  }
+
+  private onInstallHapClick(): void {
+    if (this.installBusy) {
+      return;
+    }
+    if (this.hapUri.length === 0) {
+      this.toast('请先选择 HAP 文件');
+      return;
+    }
+    if (this.hapRealPath.length === 0) {
+      // 选了文件但 FileUri 解析不出路径（picker 罕见失败路径）——别再说「请先选择」
+      this.toast('无法解析所选文件的路径，请重新选择');
+      return;
+    }
+    if (!this.connected) {
+      this.toast('请先连接设备');
+      return;
+    }
+    const sizeLine = this.hapSizeText.length > 0 ? `（${this.hapSizeText}）` : '';
+    this.getUIContext().showAlertDialog({
+      title: '确认安装',
+      message: `将安装 ${this.hapDisplayName}${sizeLine}\n同名应用会被覆盖。`,
+      autoCancel: false,
+      primaryButton: {
+        value: '安装',
+        fontColor: Color.Red,
+        action: () => { this.doInstallHap(); }
+      },
+      secondaryButton: {
+        value: '取消',
+        action: () => {}
+      }
+    });
+  }
+
+  private async doInstallHap(): Promise<void> {
+    const conn = this.conn;
+    if (conn === null || this.hapUri.length === 0 || this.installBusy) {
+      return;
+    }
+    if (this.hapFileSize <= 0) {
+      // stat 失败过：重新拿一次大小（传输协议必须要 fileSize）
+      try {
+        const fu = new fileUri.FileUri(this.hapUri);
+        this.hapFileSize = fileIo.statSync(fu.path).size;
+      } catch (err) {
+        this.installResultOk = false;
+        this.installResultText = `无法读取文件大小: ${(err as BusinessError).message ?? `${err}`}`;
+        return;
+      }
+    }
+    this.installBusy = true;
+    this.installResultOk = false;
+    this.installResultText = '';
+    const totalSize = this.hapFileSize;
+    // 读缓冲复用：传输是顺序 await 的，一块读完才读下一块，单缓冲安全。
+    // 返回视图（不 slice 拷贝），通道侧自己 set 进帧缓冲。
+    const readBuf = new ArrayBuffer(FILE_CHUNK_BYTES);
+    try {
+      const file = fileIo.openSync(this.hapUri, fileIo.OpenMode.READ_ONLY);
+      let transferText = '正在传输到设备...';
+      try {
+        const result: HapInstallResult = await installHapFromUri(
+          conn,
+          totalSize,
+          (offset: number, maxLen: number): Promise<Uint8Array> => {
+            return new Promise<Uint8Array>((resolve: (data: Uint8Array) => void, reject: (err: Error) => void) => {
+              try {
+                const n = fileIo.readSync(file.fd, readBuf, { offset, length: maxLen });
+                resolve(new Uint8Array(readBuf, 0, n));
+              } catch (err) {
+                reject(new Error(`读文件失败: ${(err as BusinessError).message ?? `${err}`}`));
+              }
+            });
+          },
+          (phase: string, progressBytes?: number) => {
+            if (phase === 'transfer' && progressBytes !== undefined && totalSize > 0) {
+              transferText = `正在传输到设备... ${this.formatHapSize(progressBytes)} / ${this.formatHapSize(totalSize)}`;
+              this.installPhaseText = transferText;
+            } else if (phase === 'install') {
+              this.installPhaseText = '正在安装...';
+            } else if (phase === 'clean') {
+              this.installPhaseText = '正在清理临时文件...';
+            }
+          }
+        );
+        this.installPhaseText = '';
+        if (!result.copyOk) {
+          this.appendLog(`[install] 传输失败: ${result.installOutput}`);
+          this.installResultOk = false;
+          this.installResultText = `传输失败\n${result.installOutput}`;
+        } else if (result.installOk) {
+          this.appendLog(`[install] 安装成功: ${this.hapDisplayName}`);
+          this.installResultOk = true;
+          this.installResultText = '安装成功';
+        } else {
+          this.appendLog(`[install] 安装失败: ${result.installOutput}`);
+          this.installResultOk = false;
+          this.installResultText =
+            `安装失败\n${result.installOutput.length > 0 ? result.installOutput : 'bm install 返回非零'}`;
+        }
+        if (result.copyOk && result.deleteOk) {
+          this.appendLog(`[install] 删除成功: ${result.tmpName}`);
+        } else if (result.copyOk && !result.deleteOk) {
+          this.appendLog(`[install] 删除失败: ${result.tmpName}`);
+          this.installResultText += `\n临时文件删除失败（${result.tmpName}）`;
+        }
+        this.toast(!result.copyOk ? '传输失败' : (result.installOk ? '安装成功' : '安装失败'));
+      } finally {
+        try {
+          fileIo.closeSync(file);
+        } catch (closeErr) {
+          // 关闭失败不影响结果
+        }
+      }
+    } catch (err) {
+      const msg = (err as BusinessError).message ?? `${err}`;
+      this.appendLog(`[install] 安装中断: ${msg}`);
+      this.installPhaseText = '';
+      this.installResultOk = false;
+      this.installResultText = `安装中断: ${msg}`;
+      this.toast('安装中断');
+    } finally {
+      this.installBusy = false;
+    }
   }
 
   private clampPowerMode(value: number): number {
@@ -2942,6 +3296,10 @@ struct Index {
       this.closeAgentPage();
       return true;
     }
+    if (this.showInstallPage) {
+      this.closeInstallPage();
+      return true;
+    }
     return false;
   }
 
@@ -3259,7 +3617,7 @@ struct Index {
             .fontSize($r('sys.float.ohos_id_text_size_sub_title2'))
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'));
-          Text('全屏使用交互式 shell')
+          Text('使用交互式 shell')
             .fontSize($r('sys.float.ohos_id_text_size_body3'))
             .fontColor($r('app.color.text_secondary'))
             .margin({ top: 2 });
@@ -3275,6 +3633,30 @@ struct Index {
       .borderRadius(12)
       .backgroundColor($r('app.color.log_background'))
       .onClick(() => { this.openTerminalPage(); });
+
+      Row() {
+        Column() {
+          Text('安装 HAP')
+            .fontSize($r('sys.float.ohos_id_text_size_sub_title2'))
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary'));
+          Text('选择 .hap 安装包，传输到所连设备并安装')
+            .fontSize($r('sys.float.ohos_id_text_size_body3'))
+            .fontColor($r('app.color.text_secondary'))
+            .margin({ top: 2 });
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1);
+        Text('›')
+          .fontSize(22)
+          .fontColor($r('app.color.text_secondary'));
+      }
+      .width('100%')
+      .padding(16)
+      .borderRadius(12)
+      .backgroundColor($r('app.color.log_background'))
+      .margin({ top: 10 })
+      .onClick(() => { this.openInstallPage(); });
 
       Row() {
         Column() {
@@ -3332,7 +3714,7 @@ struct Index {
             .fontColor($r('app.color.text_primary'));
           Text(this.agentRunning ?
             `正在执行 · 计划 ${this.agentTodoSummary}` :
-            '用一句话让模型自己操作这台手机')
+            '说一句话，剩下的交给 AI')
             .fontSize($r('sys.float.ohos_id_text_size_body3'))
             .fontColor($r('app.color.text_secondary'))
             .margin({ top: 2 });
@@ -4589,6 +4971,134 @@ struct Index {
   }
 
   @Builder
+  installHapPage() {
+    Column() {
+      // 顶部栏（与清空应用数据页同款）
+      Row() {
+        Text('‹ 返回')
+          .fontSize($r('sys.float.ohos_id_text_size_body1'))
+          .fontColor($r('app.color.text_primary'))
+          .onClick(() => { this.closeInstallPage(); });
+        Text('安装 HAP')
+          .fontSize($r('sys.float.ohos_id_text_size_sub_title1'))
+          .fontWeight(FontWeight.Bold)
+          .layoutWeight(1)
+          .textAlign(TextAlign.Center)
+          .fontColor($r('app.color.text_primary'));
+        // 右侧占位，保持标题居中
+        Text('返回')
+          .fontSize($r('sys.float.ohos_id_text_size_body1'))
+          .opacity(0);
+      }
+      .width('100%')
+      .padding({ top: 4, bottom: 12 });
+
+      Scroll() {
+        Column() {
+          Text('选择本机的 .hap 安装包。应用会把它传输到所连设备并安装，完成后自动清理临时文件。')
+            .fontSize($r('sys.float.ohos_id_text_size_body3'))
+            .fontColor($r('app.color.text_secondary'))
+            .width('100%');
+
+          Button(this.hapUri.length === 0 ? '选择 HAP 文件' : '重新选择')
+            .width('100%')
+            .margin({ top: 12 })
+            .type(ButtonType.Normal)
+            .borderRadius(8)
+            .backgroundColor($r('app.color.log_background'))
+            .fontColor($r('app.color.text_primary'))
+            .enabled(!this.installBusy)
+            .onClick(() => { this.pickHapFile(); });
+
+          if (this.hapUri.length > 0) {
+            Column() {
+              Text(this.hapDisplayName)
+                .fontSize($r('sys.float.ohos_id_text_size_body1'))
+                .fontWeight(FontWeight.Medium)
+                .fontColor($r('app.color.text_primary'))
+                .maxLines(2)
+                .textOverflow({ overflow: TextOverflow.Ellipsis });
+              if (this.hapSizeText.length > 0) {
+                Text(this.hapSizeText)
+                  .fontSize($r('sys.float.ohos_id_text_size_body3'))
+                  .fontColor($r('app.color.text_secondary'))
+                  .margin({ top: 2 });
+              }
+              if (this.hapRealPath.length > 0) {
+                Text(this.hapRealPath)
+                  .fontSize($r('sys.float.ohos_id_text_size_caption1'))
+                  .fontFamily('monospace')
+                  .fontColor($r('app.color.text_secondary'))
+                  .margin({ top: 2 })
+                  .maxLines(2)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis });
+              }
+            }
+            .width('100%')
+            .alignItems(HorizontalAlign.Start)
+            .padding(12)
+            .borderRadius(12)
+            .backgroundColor($r('app.color.log_background'))
+            .margin({ top: 10 });
+          }
+
+          Button(this.installBusy ? '安装中...' : '开始安装')
+            .width('100%')
+            .margin({ top: 12 })
+            .backgroundColor($r('sys.color.ohos_id_color_emphasize'))
+            .enabled(this.hapUri.length > 0 && this.connected && !this.installBusy)
+            .onClick(() => { this.onInstallHapClick(); });
+
+          if (!this.connected) {
+            Text('设备未连接：请先返回主页连接设备')
+              .fontSize($r('sys.float.ohos_id_text_size_body3'))
+              .fontColor(Color.Red)
+              .width('100%')
+              .margin({ top: 6 });
+          }
+
+          if (this.installPhaseText.length > 0) {
+            Row() {
+              LoadingProgress()
+                .width(18)
+                .height(18)
+                .color($r('app.color.text_secondary'));
+              Text(this.installPhaseText)
+                .fontSize($r('sys.float.ohos_id_text_size_body3'))
+                .fontColor($r('app.color.text_secondary'))
+                .margin({ left: 8 });
+            }
+            .width('100%')
+            .margin({ top: 12 });
+          }
+
+          if (this.installResultText.length > 0) {
+            Text(this.installResultText)
+              .fontSize($r('sys.float.ohos_id_text_size_body2'))
+              .fontColor(Color.White)
+              .width('100%')
+              .padding(12)
+              .borderRadius(12)
+              .margin({ top: 12 })
+              .textAlign(TextAlign.Start)
+              .backgroundColor(this.installResultOk ? '#34C759' : '#E8404A');
+          }
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start);
+      }
+      .layoutWeight(1)
+      .width('100%')
+      .scrollBar(BarState.Auto)
+      .align(Alignment.TopStart);
+    }
+    .width('100%')
+    .height('100%')
+    .padding({ left: 16, right: 16, top: 16 })
+    .backgroundColor($r('app.color.page_background'));
+  }
+
+  @Builder
   mainPage() {
     Column() {
       // 这个 22fp 也是故意写死的：系统文字档最大到 20fp（dialog_tittle），够不到 22。
@@ -4657,6 +5167,9 @@ struct Index {
   build() {
     Stack() {
       this.mainPage();
+      if (this.showInstallPage) {
+        this.installHapPage();
+      }
       if (this.showTerminalPage) {
         this.terminalPage();
       }

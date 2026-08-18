@@ -161,3 +161,126 @@ export async function clearBundleData(
   }
   return commandOutput;
 }
+
+// ---------- 安装 HAP ----------
+
+const HAP_STEP_EXIT_MARKER: string = '__HDC_TOOLBOX_HAP_STEP__=';
+const HAP_TMP_DIR: string = '/data/local/tmp';
+const HAP_NAME_LETTERS: string = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+
+export interface HapInstallResult {
+  /** 临时文件名（6 位随机字母 + .hap），用于日志追踪。 */
+  tmpName: string;
+  copyOk: boolean;
+  /** copyOk 为 false 时本字段无意义（未执行安装）。 */
+  installOk: boolean;
+  /** bm install 的原始输出；cp 失败时为 cp 的输出。 */
+  installOutput: string;
+  deleteOk: boolean;
+}
+
+interface StepResult {
+  code: number;
+  output: string;
+}
+
+/** 6 位随机字母 + .hap，避免与 /data/local/tmp 里的既有文件冲突。 */
+function randomHapName(): string {
+  let name = '';
+  for (let i = 0; i < 6; i++) {
+    name += HAP_NAME_LETTERS.charAt(Math.floor(Math.random() * HAP_NAME_LETTERS.length));
+  }
+  return `${name}.hap`;
+}
+
+/** 执行单条命令并解析 printf 附加的退出码 marker（模式同 clearBundleData）。 */
+async function hapStep(conn: HdcConnection, command: string, timeoutMs: number): Promise<StepResult> {
+  const wrapped = `${command}; printf '\n${HAP_STEP_EXIT_MARKER}%s\n' "$?"`;
+  const output = await conn.executeCommand(wrapped, timeoutMs);
+  const markerIndex = output.lastIndexOf(`\n${HAP_STEP_EXIT_MARKER}`);
+  if (markerIndex < 0) {
+    throw new Error(`命令结果缺少退出码: ${output.trim()}`);
+  }
+  const stepOutput = output.substring(0, markerIndex).trim();
+  const exitText = output.substring(markerIndex + HAP_STEP_EXIT_MARKER.length + 1).trim().split('\n')[0];
+  const exitCode = Number.parseInt(exitText, 10);
+  if (Number.isNaN(exitCode)) {
+    throw new Error(`命令退出码无效: ${exitText}`);
+  }
+  return { code: exitCode, output: stepOutput };
+}
+
+const HAP_INSTALL_TRANSFER_TIMEOUT_MS: number = 600000;
+
+/**
+ * 把 HAP 安装包经 FILE 通道推送到所连设备的 /data/local/tmp，`bm install -r` 安装后清理。
+ *
+ * 文件由应用自己读（readChunk 流式回调，不整块进内存），经协议推到设备——
+ * 所以**本地设备与远程设备走同一条路**，不存在「picker 路径只在应用命名空间可见」的问题
+ * （那套 osAccount/media 路径解析已随本改造删除）。
+ * 阶段经 onPhase 上报：transfer（带进度字节数）→ install → clean。
+ *
+ * 失败语义：
+ * - 传输失败：不安装，无临时文件可清（daemon 收 CHECK 后才建文件，中途断开不会留半截）。
+ * - bm install 抛异常（连接断/超时）：finally 里仍执行 rm。
+ */
+export async function installHapFromUri(
+  conn: HdcConnection,
+  fileSize: number,
+  readChunk: (offset: number, maxLen: number) => Promise<Uint8Array>,
+  onPhase?: (phase: string, progressBytes?: number) => void,
+  installTimeoutMs: number = 300000,
+  cleanTimeoutMs: number = 10000
+): Promise<HapInstallResult> {
+  const tmpName = randomHapName();
+  const dst = `${HAP_TMP_DIR}/${tmpName}`;
+  const result: HapInstallResult = { tmpName, copyOk: false, installOk: false, installOutput: '', deleteOk: false };
+
+  if (onPhase !== undefined) {
+    onPhase('transfer', 0);
+  }
+  const channel = conn.openFileChannel();
+  try {
+    await channel.push(
+      fileSize,
+      dst,
+      tmpName,
+      readChunk,
+      (sentBytes: number) => {
+        if (onPhase !== undefined) {
+          onPhase('transfer', sentBytes);
+        }
+      },
+      HAP_INSTALL_TRANSFER_TIMEOUT_MS
+    );
+    result.copyOk = true;
+  } catch (err) {
+    result.installOutput = (err as Error).message;
+    return result;
+  }
+
+  try {
+    if (onPhase !== undefined) {
+      onPhase('install');
+    }
+    const install = await hapStep(conn, `bm install -r -p ${shellQuote(dst)}`, installTimeoutMs);
+    // bm 的退出码不可信：真机实测（2026-08-18 未签名 hap）失败时输出
+    // "error: failed to install bundle. / code:9568320 / error: no signature file."
+    // 而退出码仍是 0 —— 官方 daemon 同样只看 exitStatus==0（daemon_app.cpp:103），
+    // 所以官方 hdc install 也误报。唯一可靠信号是 bm 输出原文：
+    // 成功固定打 "install bundle successfully."（终端实测成功样例）。
+    result.installOk = install.code === 0 && install.output.includes('install bundle successfully');
+    result.installOutput = install.output;
+  } finally {
+    if (onPhase !== undefined) {
+      onPhase('clean');
+    }
+    try {
+      const clean = await hapStep(conn, `rm -f ${shellQuote(dst)}`, cleanTimeoutMs);
+      result.deleteOk = clean.code === 0;
+    } catch (err) {
+      result.deleteOk = false;
+    }
+  }
+  return result;
+}

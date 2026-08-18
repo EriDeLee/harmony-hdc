@@ -16,6 +16,12 @@ export const CMD_KERNEL_ECHO_RAW: number = 10; // shell 输出回传命令字
 export const CMD_UNITY_EXECUTE: number = 1001;
 export const CMD_SHELL_INIT: number = 2000;
 export const CMD_SHELL_DATA: number = 2001;
+// FILE 通道（file.cpp / define_plus.h；帧序列经 scripts/device/hdc-file-probe.js 真机验证）
+export const CMD_KERNEL_WAKEUP_SLAVETASK: number = 12;
+export const CMD_FILE_CHECK: number = 3001;
+export const CMD_FILE_BEGIN: number = 3002;
+export const CMD_FILE_DATA: number = 3003;
+export const CMD_FILE_FINISH: number = 3004;
 
 // 认证类型（SessionHandShake.authType）
 export const AUTH_NONE: number = 0;
