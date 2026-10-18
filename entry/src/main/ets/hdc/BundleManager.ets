@@ -234,7 +234,13 @@ export async function installHapFromUri(
 ): Promise<HapInstallResult> {
   const tmpName = randomHapName();
   const dst = `${HAP_TMP_DIR}/${tmpName}`;
-  const result: HapInstallResult = { tmpName, copyOk: false, installOk: false, installOutput: '', deleteOk: false };
+  const result: HapInstallResult = {
+    tmpName,
+    copyOk: false,
+    installOk: false,
+    installOutput: '',
+    deleteOk: false
+  };
 
   if (onPhase !== undefined) {
     onPhase('transfer', 0);
@@ -265,7 +271,7 @@ export async function installHapFromUri(
     }
     const install = await hapStep(conn, `bm install -r -p ${shellQuote(dst)}`, installTimeoutMs);
     // bm 的退出码不可信：真机实测（2026-08-18 未签名 hap）失败时输出
-    // "error: failed to install bundle. / code:9568320 / error: no signature file."
+    // 例如安装器可能返回 9568320，表示缺少签名文件。
     // 而退出码仍是 0 —— 官方 daemon 同样只看 exitStatus==0（daemon_app.cpp:103），
     // 所以官方 hdc install 也误报。唯一可靠信号是 bm 输出原文：
     // 成功固定打 "install bundle successfully."（终端实测成功样例）。

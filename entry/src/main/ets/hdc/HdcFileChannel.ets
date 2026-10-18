@@ -87,7 +87,7 @@ function encodePayloadPrefix(index: number, size: number): Uint8Array {
 
 export class HdcFileChannel {
   readonly channelId: number;
-  private readonly send: FileSender;
+  private readonly sender: FileSender;
   private readonly release: FileRelease;
   private settled: boolean = false;
   private beginReceived: boolean = false;
@@ -100,8 +100,12 @@ export class HdcFileChannel {
 
   constructor(channelId: number, send: FileSender, release: FileRelease) {
     this.channelId = channelId;
-    this.send = send;
+    this.sender = send;
     this.release = release;
+  }
+
+  private send(payload: Uint8Array, commandFlag: number, channelId: number): Promise<void> {
+    return this.sender(payload, commandFlag, channelId);
   }
 
   /**
@@ -112,7 +116,7 @@ export class HdcFileChannel {
     fileSize: number,
     remotePath: string,
     optionalName: string,
-    readChunk: FileChunkReader,
+    readChunk: (offset: number, maxLen: number) => Promise<Uint8Array>,
     onProgress: (sentBytes: number) => void,
     timeoutMs: number = 300000
   ): Promise<void> {
@@ -151,7 +155,7 @@ export class HdcFileChannel {
     fileSize: number,
     remotePath: string,
     optionalName: string,
-    readChunk: FileChunkReader,
+    readChunk: (offset: number, maxLen: number) => Promise<Uint8Array>,
     onProgress: (sentBytes: number) => void
   ): Promise<void> {
     await this.send(new Uint8Array(0), CMD_KERNEL_WAKEUP_SLAVETASK, this.channelId);
@@ -187,9 +191,11 @@ export class HdcFileChannel {
       // send 的同步段就完成 buildFrame 拷贝，下一轮覆写帧缓冲不污染在飞数据；
       // 同一线程按调用序写 socket，帧序不变。
       if (inflight.length >= SEND_WINDOW) {
-        await inflight.shift();
+        const oldest: Promise<void> = inflight[0];
+        inflight.shift();
+        await oldest;
         if (firstFailure !== null) {
-          throw firstFailure;
+          throw firstFailure as Error;
         }
         // 超时看门狗触发后 doPush 已被 race 抛弃，但这个循环还会继续读完整份文件
         // 才到 waitFinish——这里早点停（settled 只在 fail() 走过后为真）。
@@ -213,11 +219,12 @@ export class HdcFileChannel {
     if (inflight.length > 0) {
       await Promise.allSettled(inflight);
       if (firstFailure !== null) {
-        throw firstFailure;
+        throw firstFailure as Error;
       }
     }
     await this.waitFinish();
-    await this.send(new Uint8Array(1), CMD_FILE_FINISH, this.channelId); // payload=[0]
+    // 结束帧的载荷为一个零字节。
+    await this.send(new Uint8Array(1), CMD_FILE_FINISH, this.channelId);
     await this.waitClose();
     if (!this.settled) {
       this.settled = true;

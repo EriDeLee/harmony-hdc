@@ -16,7 +16,9 @@ import {
   loadBundleSystemMap,
   saveBundleSystemMap
 } from '../hdc/HdcSettings';
-import { listBundles, clearBundleData, installHapFromUri, BundleEntry, ListBundlesResult, HapInstallResult } from '../hdc/BundleManager';
+import {
+  listBundles, clearBundleData, installHapFromUri, BundleEntry, ListBundlesResult, HapInstallResult
+} from '../hdc/BundleManager';
 import { DeviceControl, ActionSettings } from '../agent/DeviceControl';
 import { ObserveContext } from '../agent/Observer';
 import {
@@ -3514,7 +3516,12 @@ struct Index {
   @Builder
   fieldRow(cfg: FieldRowOptions) {
     Row() {
-      Text(cfg.label).fontSize($r('sys.float.ohos_id_text_size_body2')).width(72).fontColor($r('app.color.text_secondary'));
+      Text(cfg.label)
+        .accessibilityRole(AccessibilityRoleType.TEXT)
+        .accessibilityText(cfg.label)
+        .fontSize($r('sys.float.ohos_id_text_size_body2'))
+        .width(72)
+        .fontColor($r('app.color.text_secondary'));
       TextInput({ text: cfg.value })
         .fontSize(INPUT_FONT_SIZE)
         .layoutWeight(1)
@@ -3526,6 +3533,7 @@ struct Index {
         .focusable(cfg.touchable !== false)
         .onChange(cfg.onChange);
     }
+    .accessibilityRole(AccessibilityRoleType.ROW)
     .width('100%')
     .margin({ bottom: 8 });
   }
@@ -3534,9 +3542,11 @@ struct Index {
   modeSwitch() {
     Row() {
       Button('日志')
+        .accessibilityText('日志')
         .layoutWeight(1)
         .type(ButtonType.Normal)
-        .backgroundColor(this.viewMode === 'logs' ? $r('sys.color.ohos_id_color_emphasize') : $r('app.color.log_background'))
+        .backgroundColor(this.viewMode === 'logs' ?
+          $r('sys.color.ohos_id_color_emphasize') : $r('app.color.log_background'))
         .fontColor(this.viewMode === 'logs' ? Color.White : $r('app.color.text_primary'))
         .border({
           width: 1,
@@ -3545,10 +3555,12 @@ struct Index {
         .borderRadius(8)
         .onClick(() => { this.viewMode = 'logs'; });
       Button('功能')
+        .accessibilityText('功能')
         .layoutWeight(1)
         .margin({ left: 8 })
         .type(ButtonType.Normal)
-        .backgroundColor(this.viewMode === 'tools' ? $r('sys.color.ohos_id_color_emphasize') : $r('app.color.log_background'))
+        .backgroundColor(this.viewMode === 'tools' ?
+          $r('sys.color.ohos_id_color_emphasize') : $r('app.color.log_background'))
         .fontColor(this.viewMode === 'tools' ? Color.White : $r('app.color.text_primary'))
         .border({
           width: 1,
@@ -3557,6 +3569,7 @@ struct Index {
         .borderRadius(8)
         .onClick(() => { this.openToolsPage(); });
     }
+    .accessibilityRole(AccessibilityRoleType.ROW)
     .width('100%')
     .margin({ bottom: 8 });
   }
@@ -3566,6 +3579,8 @@ struct Index {
     Column() {
       Scroll(this.terminalScroller) {
         Text(this.outputText.length > 0 ? this.outputText : '（shell 输出）')
+          .accessibilityRole(AccessibilityRoleType.TEXT)
+          .accessibilityText(this.outputText.length > 0 ? this.outputText : '（shell 输出）')
           .fontSize($r('sys.float.ohos_id_text_size_body3'))
           .fontFamily('monospace')
           .fontColor($r('app.color.terminal_text'))
@@ -3619,17 +3634,21 @@ struct Index {
           .onChange((v: string) => { this.command = v; })
           .onSubmit(() => { this.onSendCommand(); });
         Button('发送')
+          .accessibilityText('发送')
           .margin({ left: 8 })
           .enabled(this.connected)
           .onClick(() => { this.onSendCommand(); });
         Button('^C')
+          .accessibilityText('中断当前命令')
           .margin({ left: 8 })
           .enabled(this.connected)
           .onClick(() => { this.onCtrlC(); });
       }
+      .accessibilityRole(AccessibilityRoleType.ROW)
       .width('100%')
       .margin({ top: 8 });
     }
+    .accessibilityRole(AccessibilityRoleType.COLUMN)
     .width('100%')
     .height('100%');
   }
@@ -3641,6 +3660,8 @@ struct Index {
       Column() {
         ForEach(this.logs, (line: string, index: number) => {
           Text(line)
+            .accessibilityRole(AccessibilityRoleType.TEXT)
+            .accessibilityText(line)
             .fontSize($r('sys.float.ohos_id_text_size_caption1'))
             .fontFamily('monospace')
             .fontColor($r('app.color.text_primary'))
@@ -3648,6 +3669,7 @@ struct Index {
             .textAlign(TextAlign.Start);
         }, (line: string, index: number) => `${index}:${line}`);
       }
+      .accessibilityRole(AccessibilityRoleType.COLUMN)
       .width('100%')
       .alignItems(HorizontalAlign.Start);
     }
@@ -3686,20 +3708,25 @@ struct Index {
       Row() {
         Column() {
           Text('终端')
+            .accessibilityRole(AccessibilityRoleType.TEXT)
             .fontSize($r('sys.float.ohos_id_text_size_sub_title2'))
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'));
           Text('使用交互式 shell')
+            .accessibilityRole(AccessibilityRoleType.TEXT)
             .fontSize($r('sys.float.ohos_id_text_size_body3'))
             .fontColor($r('app.color.text_secondary'))
             .margin({ top: 2 });
         }
+        .accessibilityRole(AccessibilityRoleType.COLUMN)
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1);
         Text('›')
+          .accessibilityRole(AccessibilityRoleType.TEXT)
           .fontSize(22)
           .fontColor($r('app.color.text_secondary'));
       }
+      .accessibilityRole(AccessibilityRoleType.BUTTON)
       .width('100%')
       .padding(16)
       .borderRadius(12)
@@ -3709,20 +3736,25 @@ struct Index {
       Row() {
         Column() {
           Text('安装 HAP')
+            .accessibilityRole(AccessibilityRoleType.TEXT)
             .fontSize($r('sys.float.ohos_id_text_size_sub_title2'))
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'));
           Text('选择 .hap 安装包，传输到所连设备并安装')
+            .accessibilityRole(AccessibilityRoleType.TEXT)
             .fontSize($r('sys.float.ohos_id_text_size_body3'))
             .fontColor($r('app.color.text_secondary'))
             .margin({ top: 2 });
         }
+        .accessibilityRole(AccessibilityRoleType.COLUMN)
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1);
         Text('›')
+          .accessibilityRole(AccessibilityRoleType.TEXT)
           .fontSize(22)
           .fontColor($r('app.color.text_secondary'));
       }
+      .accessibilityRole(AccessibilityRoleType.BUTTON)
       .width('100%')
       .padding(16)
       .borderRadius(12)
@@ -3733,20 +3765,25 @@ struct Index {
       Row() {
         Column() {
           Text('清空应用数据')
+            .accessibilityRole(AccessibilityRoleType.TEXT)
             .fontSize($r('sys.float.ohos_id_text_size_sub_title2'))
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'));
           Text('多选应用，通过 bm 清除其数据')
+            .accessibilityRole(AccessibilityRoleType.TEXT)
             .fontSize($r('sys.float.ohos_id_text_size_body3'))
             .fontColor($r('app.color.text_secondary'))
             .margin({ top: 2 });
         }
+        .accessibilityRole(AccessibilityRoleType.COLUMN)
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1);
         Text('›')
+          .accessibilityRole(AccessibilityRoleType.TEXT)
           .fontSize(22)
           .fontColor($r('app.color.text_secondary'));
       }
+      .accessibilityRole(AccessibilityRoleType.BUTTON)
       .width('100%')
       .padding(16)
       .borderRadius(12)
@@ -3757,20 +3794,25 @@ struct Index {
       Row() {
         Column() {
           Text('电源控制')
+            .accessibilityRole(AccessibilityRoleType.TEXT)
             .fontSize($r('sys.float.ohos_id_text_size_sub_title2'))
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'));
           Text('熄屏、电源挡位与屏幕超时')
+            .accessibilityRole(AccessibilityRoleType.TEXT)
             .fontSize($r('sys.float.ohos_id_text_size_body3'))
             .fontColor($r('app.color.text_secondary'))
             .margin({ top: 2 });
         }
+        .accessibilityRole(AccessibilityRoleType.COLUMN)
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1);
         Text('›')
+          .accessibilityRole(AccessibilityRoleType.TEXT)
           .fontSize(22)
           .fontColor($r('app.color.text_secondary'));
       }
+      .accessibilityRole(AccessibilityRoleType.BUTTON)
       .width('100%')
       .padding(16)
       .borderRadius(12)
@@ -3781,6 +3823,7 @@ struct Index {
       Row() {
         Column() {
           Text('AGENT 操控')
+            .accessibilityRole(AccessibilityRoleType.TEXT)
             .fontSize($r('sys.float.ohos_id_text_size_sub_title2'))
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'));
@@ -3791,12 +3834,15 @@ struct Index {
             .fontColor($r('app.color.text_secondary'))
             .margin({ top: 2 });
         }
+        .accessibilityRole(AccessibilityRoleType.COLUMN)
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1);
         Text('›')
+          .accessibilityRole(AccessibilityRoleType.TEXT)
           .fontSize(22)
           .fontColor($r('app.color.text_secondary'));
       }
+      .accessibilityRole(AccessibilityRoleType.BUTTON)
       .width('100%')
       .padding(16)
       .borderRadius(12)
@@ -3804,6 +3850,7 @@ struct Index {
       .margin({ top: 10 })
       .onClick(() => { this.openAgentPage(); });
     }
+    .accessibilityRole(AccessibilityRoleType.COLUMN)
     .width('100%')
     .height('100%')
     .alignItems(HorizontalAlign.Start);
@@ -3813,16 +3860,21 @@ struct Index {
   powerSection(title: string, subtitle: string) {
     Column() {
       Text(title)
+        .accessibilityRole(AccessibilityRoleType.TEXT)
+        .accessibilityText(title)
         .fontSize($r('sys.float.ohos_id_text_size_sub_title2'))
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'))
         .width('100%');
       Text(subtitle)
+        .accessibilityRole(AccessibilityRoleType.TEXT)
+        .accessibilityText(subtitle)
         .fontSize($r('sys.float.ohos_id_text_size_body3'))
         .fontColor($r('app.color.text_secondary'))
         .width('100%')
         .margin({ top: 4 });
     }
+    .accessibilityRole(AccessibilityRoleType.COLUMN)
     .width('100%')
     .alignItems(HorizontalAlign.Start)
     .margin({ bottom: 12 });
@@ -3832,18 +3884,24 @@ struct Index {
   powerModeTick(option: PowerModeOption) {
     Column() {
       Text(`${option.value}`)
+        .accessibilityRole(AccessibilityRoleType.TEXT)
         .fontSize($r('sys.float.ohos_id_text_size_body3'))
         .fontWeight(this.pendingPowerMode === option.value ? FontWeight.Bold : FontWeight.Regular)
-        .fontColor(this.pendingPowerMode === option.value ? $r('sys.color.ohos_id_color_emphasize') : $r('app.color.text_secondary'));
+        .fontColor(this.pendingPowerMode === option.value ?
+          $r('sys.color.ohos_id_color_emphasize') : $r('app.color.text_secondary'));
       Text(option.title)
+        .accessibilityRole(AccessibilityRoleType.TEXT)
+        .accessibilityText(option.title)
         .fontSize($r('sys.float.ohos_id_text_size_caption1'))
-        .fontColor(this.pendingPowerMode === option.value ? $r('sys.color.ohos_id_color_emphasize') : $r('app.color.text_secondary'))
+        .fontColor(this.pendingPowerMode === option.value ?
+          $r('sys.color.ohos_id_color_emphasize') : $r('app.color.text_secondary'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .width('100%')
         .textAlign(TextAlign.Center)
         .margin({ top: 2 });
     }
+    .accessibilityRole(AccessibilityRoleType.COLUMN)
     .layoutWeight(1)
     .alignItems(HorizontalAlign.Center);
   }
@@ -3852,6 +3910,7 @@ struct Index {
   timeoutHourPickerColumn() {
     Column() {
       Text('小时')
+        .accessibilityRole(AccessibilityRoleType.TEXT)
         .fontSize($r('sys.float.ohos_id_text_size_body2'))
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_secondary'))
@@ -3874,7 +3933,10 @@ struct Index {
         } as DividerOptions)
         .disappearTextStyle({ color: '#D1D1D6', font: { size: 22, weight: FontWeight.Regular } })
         .textStyle({ color: $r('app.color.text_primary'), font: { size: 28, weight: FontWeight.Regular } })
-        .selectedTextStyle({ color: $r('sys.color.ohos_id_color_emphasize'), font: { size: 36, weight: FontWeight.Bold } })
+        .selectedTextStyle({
+          color: $r('sys.color.ohos_id_color_emphasize'),
+          font: { size: 36, weight: FontWeight.Bold }
+        })
         .onChange((_value: string | string[], index: number | number[]) => {
           if (!this.timeoutControlsEnabled()) {
             return;
@@ -3882,6 +3944,7 @@ struct Index {
           this.setTimeoutParts(this.pickerIndex(index), this.timeoutMinutes, this.timeoutSeconds);
         });
     }
+    .accessibilityRole(AccessibilityRoleType.COLUMN)
     .layoutWeight(1)
     .padding({ left: 4, right: 4, top: 8, bottom: 8 })
     .borderRadius(12)
@@ -3892,6 +3955,7 @@ struct Index {
   timeoutMinutePickerColumn() {
     Column() {
       Text('分钟')
+        .accessibilityRole(AccessibilityRoleType.TEXT)
         .fontSize($r('sys.float.ohos_id_text_size_body2'))
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_secondary'))
@@ -3914,7 +3978,10 @@ struct Index {
         } as DividerOptions)
         .disappearTextStyle({ color: '#D1D1D6', font: { size: 22, weight: FontWeight.Regular } })
         .textStyle({ color: $r('app.color.text_primary'), font: { size: 28, weight: FontWeight.Regular } })
-        .selectedTextStyle({ color: $r('sys.color.ohos_id_color_emphasize'), font: { size: 36, weight: FontWeight.Bold } })
+        .selectedTextStyle({
+          color: $r('sys.color.ohos_id_color_emphasize'),
+          font: { size: 36, weight: FontWeight.Bold }
+        })
         .onChange((_value: string | string[], index: number | number[]) => {
           if (!this.timeoutControlsEnabled()) {
             return;
@@ -3922,6 +3989,7 @@ struct Index {
           this.setTimeoutParts(this.timeoutHours, this.pickerIndex(index), this.timeoutSeconds);
         });
     }
+    .accessibilityRole(AccessibilityRoleType.COLUMN)
     .layoutWeight(1)
     .padding({ left: 4, right: 4, top: 8, bottom: 8 })
     .borderRadius(12)
@@ -3932,6 +4000,7 @@ struct Index {
   timeoutSecondPickerColumn() {
     Column() {
       Text('秒')
+        .accessibilityRole(AccessibilityRoleType.TEXT)
         .fontSize($r('sys.float.ohos_id_text_size_body2'))
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_secondary'))
@@ -3954,7 +4023,10 @@ struct Index {
         } as DividerOptions)
         .disappearTextStyle({ color: '#D1D1D6', font: { size: 22, weight: FontWeight.Regular } })
         .textStyle({ color: $r('app.color.text_primary'), font: { size: 28, weight: FontWeight.Regular } })
-        .selectedTextStyle({ color: $r('sys.color.ohos_id_color_emphasize'), font: { size: 36, weight: FontWeight.Bold } })
+        .selectedTextStyle({
+          color: $r('sys.color.ohos_id_color_emphasize'),
+          font: { size: 36, weight: FontWeight.Bold }
+        })
         .onChange((_value: string | string[], index: number | number[]) => {
           if (!this.timeoutControlsEnabled()) {
             return;
@@ -3962,6 +4034,7 @@ struct Index {
           this.setTimeoutParts(this.timeoutHours, this.timeoutMinutes, this.pickerIndex(index));
         });
     }
+    .accessibilityRole(AccessibilityRoleType.COLUMN)
     .layoutWeight(1)
     .padding({ left: 4, right: 4, top: 8, bottom: 8 })
     .borderRadius(12)
@@ -3973,19 +4046,23 @@ struct Index {
     Column() {
       Row() {
         Text('‹ 返回')
+          .accessibilityRole(AccessibilityRoleType.BUTTON)
           .fontSize($r('sys.float.ohos_id_text_size_body1'))
           .fontColor($r('app.color.text_primary'))
           .onClick(() => { this.closePowerPage(); });
         Text('电源控制')
+          .accessibilityRole(AccessibilityRoleType.TEXT)
           .fontSize($r('sys.float.ohos_id_text_size_sub_title1'))
           .fontWeight(FontWeight.Bold)
           .layoutWeight(1)
           .textAlign(TextAlign.Center)
           .fontColor($r('app.color.text_primary'));
         Text('返回')
+          .accessibilityRole(AccessibilityRoleType.TEXT)
           .fontSize($r('sys.float.ohos_id_text_size_body1'))
           .opacity(0);
       }
+      .accessibilityRole(AccessibilityRoleType.ROW)
       .width('100%')
       .padding({ top: 4, bottom: 12 });
 
@@ -3999,6 +4076,7 @@ struct Index {
             // 以及 ThermalService / BatteryService / XpowerManager，全都没有该字段。
             // 这个值只是滑块上待应用的选择，默认停在 600，与系统实际状态无关。
             Text(`将切换到：${this.powerModeInfo(this.pendingPowerMode).title}（${this.pendingPowerMode}）`)
+              .accessibilityRole(AccessibilityRoleType.TEXT)
               .fontSize($r('sys.float.ohos_id_text_size_dialog_tittle'))
               .fontWeight(FontWeight.Bold)
               .fontColor($r('app.color.text_primary'))
@@ -4007,6 +4085,7 @@ struct Index {
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .margin({ bottom: 12 });
             Text(`将执行：power-shell setmode ${this.pendingPowerMode}`)
+              .accessibilityRole(AccessibilityRoleType.TEXT)
               .fontSize($r('sys.float.ohos_id_text_size_body3'))
               .fontColor($r('app.color.text_secondary'))
               .width('100%')
@@ -4022,14 +4101,17 @@ struct Index {
                 this.powerModeTick(option);
               }, (option: PowerModeOption) => `${option.value}`);
             }
+            .accessibilityRole(AccessibilityRoleType.ROW)
             .width('100%')
             .margin({ top: 8, bottom: 16 });
             Button(this.powerBusy ? '执行中...' : '应用挡位')
+              .accessibilityText(this.powerBusy ? '执行中...' : '应用挡位')
               .width('100%')
               .height(44)
               .enabled(this.connected && !this.powerBusy)
               .onClick(() => { this.onApplyPowerMode(); });
           }
+          .accessibilityRole(AccessibilityRoleType.COLUMN)
           .width('100%')
           .padding(16)
           .borderRadius(16)
@@ -4039,6 +4121,7 @@ struct Index {
           Column() {
             this.powerSection('屏幕', '立即发送 power-shell suspend 熄灭屏幕');
             Button('熄屏')
+              .accessibilityText('熄屏')
               .width('100%')
               .height(44)
               .backgroundColor(Color.Red)
@@ -4046,6 +4129,7 @@ struct Index {
               .enabled(this.connected && !this.powerBusy)
               .onClick(() => { this.onSuspendScreen(); });
           }
+          .accessibilityRole(AccessibilityRoleType.COLUMN)
           .width('100%')
           .padding(16)
           .borderRadius(16)
@@ -4061,16 +4145,20 @@ struct Index {
               Blank().width(8);
               this.timeoutSecondPickerColumn();
             }
+            .accessibilityRole(AccessibilityRoleType.ROW)
             .width('100%')
             .margin({ top: 12 });
 
             Text(this.timeoutSummary())
+              .accessibilityRole(AccessibilityRoleType.TEXT)
+              .accessibilityText(this.timeoutSummary())
               .fontSize($r('sys.float.ohos_id_text_size_body2'))
               .fontWeight(FontWeight.Medium)
               .fontColor($r('app.color.text_primary'))
               .width('100%')
               .margin({ top: 14 });
             Text(`将执行：${this.timeoutCommandPreview()}`)
+              .accessibilityRole(AccessibilityRoleType.TEXT)
               .fontSize($r('sys.float.ohos_id_text_size_body3'))
               .fontFamily('monospace')
               .fontColor($r('app.color.text_secondary'))
@@ -4080,11 +4168,13 @@ struct Index {
               .margin({ top: 6, bottom: 12 });
 
             Button(this.timeoutApplyButtonText())
+              .accessibilityText(this.timeoutApplyButtonText())
               .width('100%')
               .height(44)
               .enabled(this.timeoutControlsEnabled())
               .onClick(() => { this.onApplyTimeout(); });
           }
+          .accessibilityRole(AccessibilityRoleType.COLUMN)
           .width('100%')
           .padding(16)
           .borderRadius(16)
@@ -4092,6 +4182,7 @@ struct Index {
           .margin({ top: 12 });
 
         }
+        .accessibilityRole(AccessibilityRoleType.COLUMN)
         .width('100%')
         .alignItems(HorizontalAlign.Start);
       }
@@ -4113,6 +4204,7 @@ struct Index {
         this.markPowerPageScrolling(source);
       });
     }
+    .accessibilityRole(AccessibilityRoleType.COLUMN)
     .width('100%')
     .height('100%')
     .padding({ left: 16, right: 16, top: 16 })
@@ -4124,19 +4216,24 @@ struct Index {
     Column() {
       Row() {
         Text('‹ 返回')
+          .accessibilityRole(AccessibilityRoleType.BUTTON)
           .fontSize($r('sys.float.ohos_id_text_size_body1'))
           .fontColor(Color.White)
           .onClick(() => { this.closeTerminalPage(); });
         Text('终端')
+          .accessibilityRole(AccessibilityRoleType.TEXT)
           .fontSize($r('sys.float.ohos_id_text_size_sub_title1'))
           .fontWeight(FontWeight.Bold)
           .layoutWeight(1)
           .textAlign(TextAlign.Center)
           .fontColor(Color.White);
         Text(this.connected ? '已连接' : '未连接')
+          .accessibilityRole(AccessibilityRoleType.TEXT)
+          .accessibilityText(this.connected ? '已连接' : '未连接')
           .fontSize($r('sys.float.ohos_id_text_size_body3'))
           .fontColor($r('app.color.terminal_text'));
       }
+      .accessibilityRole(AccessibilityRoleType.ROW)
       .width('100%')
       .padding({ left: 16, right: 16, top: 18, bottom: 10 })
       .backgroundColor($r('app.color.terminal_background'));
@@ -4144,10 +4241,12 @@ struct Index {
       Column() {
         this.terminalPanel();
       }
+      .accessibilityRole(AccessibilityRoleType.COLUMN)
       .layoutWeight(1)
       .width('100%')
       .padding({ left: 16, right: 16, bottom: 4 });
     }
+    .accessibilityRole(AccessibilityRoleType.COLUMN)
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.terminal_background'))
@@ -4185,6 +4284,7 @@ struct Index {
       if (this.itemsForPage(idx).length === 0) {
         ListItem() {
           Text('说一句要做什么，例如「打开备忘录，新建一条写上今天要买的东西」。')
+            .accessibilityRole(AccessibilityRoleType.TEXT)
             .fontSize($r('sys.float.ohos_id_text_size_body2'))
             .fontColor($r('app.color.text_secondary'))
             .width('100%')
@@ -4440,10 +4540,14 @@ struct Index {
   timelineRow(item: TimelineItem) {
     Column() {
       Text(this.timelinePrefix(item.kind))
+        .accessibilityRole(AccessibilityRoleType.TEXT)
+        .accessibilityText(this.timelinePrefix(item.kind))
         .fontSize($r('sys.float.ohos_id_text_size_caption1'))
         .fontWeight(FontWeight.Medium)
         .fontColor(this.timelineColor(item.kind));
       Text(item.text)
+        .accessibilityRole(AccessibilityRoleType.TEXT)
+        .accessibilityText(item.text)
         .fontSize(item.kind === 'thinking' ? 12 : 14)
         .fontColor(item.kind === 'thinking' ? $r('app.color.text_secondary') : $r('app.color.text_primary'))
         .fontFamily(item.kind === 'tool_call' || item.kind === 'todo' ? 'monospace' : '')
@@ -4451,6 +4555,7 @@ struct Index {
         .margin({ top: 2 })
         .textAlign(TextAlign.Start);
     }
+    .accessibilityRole(AccessibilityRoleType.COLUMN)
     .width('100%')
     .alignItems(HorizontalAlign.Start)
     .padding({ left: 12, right: 12, top: 8, bottom: 8 })
@@ -4464,11 +4569,13 @@ struct Index {
     Column() {
       Row() {
         Text('‹ 返回')
+          .accessibilityRole(AccessibilityRoleType.BUTTON)
           .fontSize($r('sys.float.ohos_id_text_size_body1'))
           .fontColor($r('app.color.text_primary'))
           .onClick(() => { this.closeAgentPage(); });
         Column() {
           Text('AGENT 操控')
+            .accessibilityRole(AccessibilityRoleType.TEXT)
             .fontSize($r('sys.float.ohos_id_text_size_sub_title1'))
             .fontWeight(FontWeight.Bold)
             .fontColor($r('app.color.text_primary'));
@@ -4479,6 +4586,8 @@ struct Index {
           // （未制定计划→2/5、未保活→保活方式名），换行会把整个标题栏顶高，
           // 运行过程中不停抖。宁可省略号截断，也不让布局跳。
           Text(this.agentStatusLine())
+            .accessibilityRole(AccessibilityRoleType.TEXT)
+            .accessibilityText(this.agentStatusLine())
             .fontSize($r('sys.float.ohos_id_text_size_caption1'))
             .fontColor($r('app.color.text_secondary'))
             .margin({ top: 2 })
@@ -4487,20 +4596,24 @@ struct Index {
             .width('100%')
             .textAlign(TextAlign.Center);
         }
+        .accessibilityRole(AccessibilityRoleType.COLUMN)
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Center);
         if (this.agentHasHistory() && !this.agentRunning && this.viewingLatest()) {
           Text('新会话')
+            .accessibilityRole(AccessibilityRoleType.BUTTON)
             .fontSize($r('sys.float.ohos_id_text_size_button2'))
             .fontColor($r('app.color.text_secondary'))
             .margin({ right: 12 })
             .onClick(() => { this.onNewAgentSession(); });
         }
         Text('设置')
+          .accessibilityRole(AccessibilityRoleType.BUTTON)
           .fontSize($r('sys.float.ohos_id_text_size_button2'))
           .fontColor($r('sys.color.ohos_id_color_emphasize'))
           .onClick(() => { this.openAgentSettings(); });
       }
+      .accessibilityRole(AccessibilityRoleType.ROW)
       .width('100%')
       .padding({ left: 16, right: 16, top: 18, bottom: 10 });
 
@@ -4512,6 +4625,8 @@ struct Index {
 
       if (this.agentUsageText.length > 0) {
         Text(this.agentUsageText)
+          .accessibilityRole(AccessibilityRoleType.TEXT)
+          .accessibilityText(this.agentUsageText)
           .fontSize($r('sys.float.ohos_id_text_size_caption1'))
           .fontFamily('monospace')
           .fontColor($r('app.color.text_secondary'))
@@ -4522,20 +4637,25 @@ struct Index {
       if (this.agentPauseReason.length > 0) {
         Row() {
           Text(this.agentPauseReason)
+            .accessibilityRole(AccessibilityRoleType.TEXT)
+            .accessibilityText(this.agentPauseReason)
             .fontSize($r('sys.float.ohos_id_text_size_body2'))
             .fontColor('#FF9500')
             .layoutWeight(1);
           Button('继续')
+            .accessibilityText('继续')
             .fontSize($r('sys.float.ohos_id_text_size_button2'))
             .height(32)
             .onClick(() => { this.resolvePause(true); });
           Button('放弃')
+            .accessibilityText('放弃')
             .fontSize($r('sys.float.ohos_id_text_size_button2'))
             .height(32)
             .backgroundColor('#FF3B30')
             .margin({ left: 8 })
             .onClick(() => { this.resolvePause(false); });
         }
+        .accessibilityRole(AccessibilityRoleType.ROW)
         .width('100%')
         .padding({ left: 16, right: 16, top: 6, bottom: 6 });
       }
@@ -4620,6 +4740,8 @@ struct Index {
 
         if (this.agentPullHint.length > 0) {
           Text(this.agentPullHint)
+            .accessibilityRole(AccessibilityRoleType.TEXT)
+            .accessibilityText(this.agentPullHint)
             .fontSize($r('sys.float.ohos_id_text_size_body3'))
             .fontColor($r('app.color.text_secondary'))
             .width('100%')
@@ -4628,6 +4750,7 @@ struct Index {
             .hitTestBehavior(HitTestMode.Transparent);
         }
       }
+      .accessibilityRole(AccessibilityRoleType.STACK)
       .layoutWeight(1)
       .width('100%')
       .padding({ left: 16, right: 16 })
@@ -4673,6 +4796,7 @@ struct Index {
             });
           if (this.agentRunning) {
             Button('停止')
+              .accessibilityText('停止')
               .fontSize($r('sys.float.ohos_id_text_size_button2'))
               .height(40)
               .backgroundColor('#FF3B30')
@@ -4680,12 +4804,14 @@ struct Index {
               .onClick(() => { this.onStopAgent(); });
           } else {
             Button(this.agentHasHistory() ? '发送' : '开始')
+              .accessibilityText(this.agentHasHistory() ? '发送' : '开始')
               .fontSize($r('sys.float.ohos_id_text_size_button2'))
               .height(40)
               .margin({ left: 8 })
               .onClick(() => { this.onSendAgent(); });
           }
         }
+        .accessibilityRole(AccessibilityRoleType.ROW)
         .width('100%')
         // 输入框会随内容长高，按钮必须钉在底边，否则它会跟着一起往上飘、
         // 停在多行文本的正中间。
@@ -4705,11 +4831,13 @@ struct Index {
         // 既把话说全又直接可点。高度与内边距沿用输入行原值，所以翻页不会跳版。
         Row() {
           Button('回到最新以继续对话')
+            .accessibilityText('回到最新以继续对话')
             .fontSize($r('sys.float.ohos_id_text_size_button2'))
             .height(40)
             .width('100%')
             .onClick(() => { this.jumpToLatest(); });
         }
+        .accessibilityRole(AccessibilityRoleType.ROW)
         .width('100%')
         // 下边距分两档。键盘收起时压到 2vp：这一行下面还有约 95px 系统手势区，
         // 那块地板动不了（试过让根容器扩进去，反而把每页底部撑出更大的空白）。
@@ -4722,6 +4850,7 @@ struct Index {
         });
       }
     }
+    .accessibilityRole(AccessibilityRoleType.COLUMN)
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.page_background'))
@@ -4732,18 +4861,23 @@ struct Index {
   settingField(label: string, hint: string) {
     Column() {
       Text(label)
+        .accessibilityRole(AccessibilityRoleType.TEXT)
+        .accessibilityText(label)
         .fontSize($r('sys.float.ohos_id_text_size_body2'))
         .fontWeight(FontWeight.Medium)
         .fontColor($r('app.color.text_primary'))
         .width('100%');
       if (hint.length > 0) {
         Text(hint)
+          .accessibilityRole(AccessibilityRoleType.TEXT)
+          .accessibilityText(hint)
           .fontSize($r('sys.float.ohos_id_text_size_caption1'))
           .fontColor($r('app.color.text_secondary'))
           .width('100%')
           .margin({ top: 2 });
       }
     }
+    .accessibilityRole(AccessibilityRoleType.COLUMN)
     .width('100%')
     .alignItems(HorizontalAlign.Start)
     .margin({ top: 14, bottom: 4 });
@@ -4754,10 +4888,12 @@ struct Index {
     Column() {
       Row() {
         Text('‹ 返回')
+          .accessibilityRole(AccessibilityRoleType.BUTTON)
           .fontSize($r('sys.float.ohos_id_text_size_body1'))
           .fontColor($r('app.color.text_primary'))
           .onClick(() => { this.closeAgentSettings(); });
         Text('模型设置')
+          .accessibilityRole(AccessibilityRoleType.TEXT)
           .fontSize($r('sys.float.ohos_id_text_size_sub_title1'))
           .fontWeight(FontWeight.Bold)
           .layoutWeight(1)
@@ -4766,9 +4902,12 @@ struct Index {
         // 不再是「保存」按钮。改动自动落盘，这里只是把这件事说出来 ——
         // 有人改完直接按返回，以为没保存，或者压根没注意到右上角有个按钮。
         Text(this.cfgSaving ? '保存中' : '自动保存')
+          .accessibilityRole(AccessibilityRoleType.TEXT)
+          .accessibilityText(this.cfgSaving ? '保存中' : '自动保存')
           .fontSize($r('sys.float.ohos_id_text_size_body2'))
           .fontColor($r('app.color.text_secondary'));
       }
+      .accessibilityRole(AccessibilityRoleType.ROW)
       .width('100%')
       .padding({ left: 16, right: 16, top: 18, bottom: 10 });
 
@@ -4843,6 +4982,7 @@ struct Index {
             // 看着像漏了东西。所以整格给足高度，字号交给自适应：
             // 在 13~20 之间按可用空间自己放大，把这一格填满。
             Text('提示词缓存')
+              .accessibilityRole(AccessibilityRoleType.TEXT)
               .fontWeight(FontWeight.Medium)
               .fontColor($r('app.color.text_primary'))
               .layoutWeight(1)
@@ -4856,6 +4996,7 @@ struct Index {
             Toggle({ type: ToggleType.Switch, isOn: $$this.cfgPromptCache })
               .onChange(() => { this.scheduleAgentConfigSave(); });
           }
+          .accessibilityRole(AccessibilityRoleType.ROW)
           .width('100%')
           .height(AGENT_SETTING_ROW_HEIGHT_VP)
           .margin({ top: 18 });
@@ -4866,6 +5007,7 @@ struct Index {
 
           this.settingField('对话记录', '删除后无法恢复');
           Button('删除全部对话记录')
+            .accessibilityText('删除全部对话记录')
             .fontSize($r('sys.float.ohos_id_text_size_button2'))
             .height(40)
             .width('100%')
@@ -4873,6 +5015,7 @@ struct Index {
             .margin({ bottom: 24 })
             .onClick(() => { this.onDeleteAllSessions(); });
         }
+        .accessibilityRole(AccessibilityRoleType.COLUMN)
         .width('100%');
       }
       .layoutWeight(1)
@@ -4886,6 +5029,7 @@ struct Index {
       .fadingEdge(true)
       .padding({ left: 16, right: 16 });
     }
+    .accessibilityRole(AccessibilityRoleType.COLUMN)
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.page_background'))
@@ -4901,11 +5045,15 @@ struct Index {
         .onChange((value: boolean) => { this.setChecked(item.name, value); });
       Column() {
         Text(item.label)
+          .accessibilityRole(AccessibilityRoleType.TEXT)
+          .accessibilityText(item.label)
           .fontSize($r('sys.float.ohos_id_text_size_body2'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .fontColor($r('app.color.text_primary'));
         Text(item.name)
+          .accessibilityRole(AccessibilityRoleType.TEXT)
+          .accessibilityText(item.name)
           .fontSize($r('sys.float.ohos_id_text_size_caption1'))
           .fontFamily('monospace')
           .maxLines(1)
@@ -4913,11 +5061,14 @@ struct Index {
           .fontColor($r('app.color.text_secondary'))
           .margin({ top: 1 });
       }
+      .accessibilityRole(AccessibilityRoleType.COLUMN)
       .alignItems(HorizontalAlign.Start)
       .layoutWeight(1)
       .margin({ left: 8 });
       if (!item.classified || item.system) {
         Text(item.classified ? '系统' : '未知')
+          .accessibilityRole(AccessibilityRoleType.TEXT)
+          .accessibilityText(item.classified ? '系统' : '未知')
           .fontSize($r('sys.float.ohos_id_text_size_caption1'))
           .fontColor($r('app.color.text_secondary'))
           .borderRadius(4)
@@ -4925,6 +5076,7 @@ struct Index {
           .padding({ left: 6, right: 6, top: 2, bottom: 2 });
       }
     }
+    .accessibilityRole(AccessibilityRoleType.ROW)
     .width('100%')
     .padding({ top: 8, bottom: 8 })
     .opacity(item.clearable ? 1 : 0.6)
@@ -4941,10 +5093,12 @@ struct Index {
       // 顶部栏
       Row() {
         Text('‹ 返回')
+          .accessibilityRole(AccessibilityRoleType.BUTTON)
           .fontSize($r('sys.float.ohos_id_text_size_body1'))
           .fontColor($r('app.color.text_primary'))
           .onClick(() => { this.closeClearPage(); });
         Text('清空应用数据')
+          .accessibilityRole(AccessibilityRoleType.TEXT)
           .fontSize($r('sys.float.ohos_id_text_size_sub_title1'))
           .fontWeight(FontWeight.Bold)
           .layoutWeight(1)
@@ -4952,15 +5106,18 @@ struct Index {
           .fontColor($r('app.color.text_primary'));
         // 右侧占位，保持标题居中
         Text('返回')
+          .accessibilityRole(AccessibilityRoleType.TEXT)
           .fontSize($r('sys.float.ohos_id_text_size_body1'))
           .opacity(0);
       }
+      .accessibilityRole(AccessibilityRoleType.ROW)
       .width('100%')
       .padding({ top: 4, bottom: 12 });
 
       // 筛选与刷新
       Row() {
         Text('包含系统应用')
+          .accessibilityRole(AccessibilityRoleType.TEXT)
           .fontSize($r('sys.float.ohos_id_text_size_body2'))
           .fontColor($r('app.color.text_primary'));
         Toggle({ type: ToggleType.Switch, isOn: this.includeSystem })
@@ -4968,29 +5125,36 @@ struct Index {
           .onChange((isOn: boolean) => { this.includeSystem = isOn; });
         Blank();
         Button('刷新')
+          .accessibilityText('刷新')
           .fontSize($r('sys.float.ohos_id_text_size_button2'))
           .enabled(this.connected && !this.toolsBusy)
           .onClick(() => { this.onRefreshBundles(); });
       }
+      .accessibilityRole(AccessibilityRoleType.ROW)
       .width('100%')
       .margin({ bottom: 6 });
 
       Row() {
         Text(this.toolsStatus)
+          .accessibilityRole(AccessibilityRoleType.TEXT)
+          .accessibilityText(this.toolsStatus)
           .fontSize($r('sys.float.ohos_id_text_size_body3'))
           .fontColor($r('app.color.text_secondary'))
           .layoutWeight(1)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis });
         Text(`已选 ${this.selectedCount()}`)
+          .accessibilityRole(AccessibilityRoleType.TEXT)
           .fontSize($r('sys.float.ohos_id_text_size_body3'))
           .fontColor($r('app.color.text_secondary'));
       }
+      .accessibilityRole(AccessibilityRoleType.ROW)
       .width('100%')
       .margin({ bottom: 6 });
 
       Row() {
         Button('全选')
+          .accessibilityText('全选')
           .fontSize($r('sys.float.ohos_id_text_size_button2'))
           .layoutWeight(1)
           .type(ButtonType.Normal)
@@ -5000,6 +5164,7 @@ struct Index {
           .enabled(!this.toolsBusy)
           .onClick(() => { this.setAllChecked(true); });
         Button('全不选')
+          .accessibilityText('全不选')
           .fontSize($r('sys.float.ohos_id_text_size_button2'))
           .layoutWeight(1)
           .margin({ left: 8 })
@@ -5010,6 +5175,7 @@ struct Index {
           .enabled(!this.toolsBusy)
           .onClick(() => { this.setAllChecked(false); });
       }
+      .accessibilityRole(AccessibilityRoleType.ROW)
       .width('100%')
       .margin({ bottom: 8 });
 
@@ -5029,6 +5195,7 @@ struct Index {
       .padding({ left: 12, right: 12 });
 
       Button(this.toolsBusy ? '处理中...' : `清除应用数据（${this.selectedCount()}）`)
+        .accessibilityText(this.toolsBusy ? '处理中...' : `清除应用数据（${this.selectedCount()}）`)
         .width('100%')
         .margin({ top: 12 })
         .backgroundColor(Color.Red)
@@ -5036,6 +5203,7 @@ struct Index {
         .enabled(this.connected && !this.toolsBusy)
         .onClick(() => { this.onClearDataClick(); });
     }
+    .accessibilityRole(AccessibilityRoleType.COLUMN)
     .width('100%')
     .height('100%')
     .padding({ left: 16, right: 16, top: 16 })
@@ -5048,10 +5216,12 @@ struct Index {
       // 顶部栏（与清空应用数据页同款）
       Row() {
         Text('‹ 返回')
+          .accessibilityRole(AccessibilityRoleType.BUTTON)
           .fontSize($r('sys.float.ohos_id_text_size_body1'))
           .fontColor($r('app.color.text_primary'))
           .onClick(() => { this.closeInstallPage(); });
         Text('安装 HAP')
+          .accessibilityRole(AccessibilityRoleType.TEXT)
           .fontSize($r('sys.float.ohos_id_text_size_sub_title1'))
           .fontWeight(FontWeight.Bold)
           .layoutWeight(1)
@@ -5059,20 +5229,24 @@ struct Index {
           .fontColor($r('app.color.text_primary'));
         // 右侧占位，保持标题居中
         Text('返回')
+          .accessibilityRole(AccessibilityRoleType.TEXT)
           .fontSize($r('sys.float.ohos_id_text_size_body1'))
           .opacity(0);
       }
+      .accessibilityRole(AccessibilityRoleType.ROW)
       .width('100%')
       .padding({ top: 4, bottom: 12 });
 
       Scroll() {
         Column() {
           Text('选择本机的 .hap 安装包。应用会把它传输到所连设备并安装，完成后自动清理临时文件。')
+            .accessibilityRole(AccessibilityRoleType.TEXT)
             .fontSize($r('sys.float.ohos_id_text_size_body3'))
             .fontColor($r('app.color.text_secondary'))
             .width('100%');
 
           Button(this.hapUri.length === 0 ? '选择 HAP 文件' : '重新选择')
+            .accessibilityText(this.hapUri.length === 0 ? '选择 HAP 文件' : '重新选择')
             .width('100%')
             .margin({ top: 12 })
             .type(ButtonType.Normal)
@@ -5085,6 +5259,8 @@ struct Index {
           if (this.hapUri.length > 0) {
             Column() {
               Text(this.hapDisplayName)
+                .accessibilityRole(AccessibilityRoleType.TEXT)
+                .accessibilityText(this.hapDisplayName)
                 .fontSize($r('sys.float.ohos_id_text_size_body1'))
                 .fontWeight(FontWeight.Medium)
                 .fontColor($r('app.color.text_primary'))
@@ -5092,12 +5268,16 @@ struct Index {
                 .textOverflow({ overflow: TextOverflow.Ellipsis });
               if (this.hapSizeText.length > 0) {
                 Text(this.hapSizeText)
+                  .accessibilityRole(AccessibilityRoleType.TEXT)
+                  .accessibilityText(this.hapSizeText)
                   .fontSize($r('sys.float.ohos_id_text_size_body3'))
                   .fontColor($r('app.color.text_secondary'))
                   .margin({ top: 2 });
               }
               if (this.hapRealPath.length > 0) {
                 Text(this.hapRealPath)
+                  .accessibilityRole(AccessibilityRoleType.TEXT)
+                  .accessibilityText(this.hapRealPath)
                   .fontSize($r('sys.float.ohos_id_text_size_caption1'))
                   .fontFamily('monospace')
                   .fontColor($r('app.color.text_secondary'))
@@ -5106,6 +5286,7 @@ struct Index {
                   .textOverflow({ overflow: TextOverflow.Ellipsis });
               }
             }
+            .accessibilityRole(AccessibilityRoleType.COLUMN)
             .width('100%')
             .alignItems(HorizontalAlign.Start)
             .padding(12)
@@ -5115,6 +5296,7 @@ struct Index {
           }
 
           Button(this.installBusy ? '安装中...' : '开始安装')
+            .accessibilityText(this.installBusy ? '安装中...' : '开始安装')
             .width('100%')
             .margin({ top: 12 })
             .backgroundColor($r('sys.color.ohos_id_color_emphasize'))
@@ -5123,6 +5305,7 @@ struct Index {
 
           if (!this.connected) {
             Text('设备未连接：请先返回主页连接设备')
+              .accessibilityRole(AccessibilityRoleType.TEXT)
               .fontSize($r('sys.float.ohos_id_text_size_body3'))
               .fontColor(Color.Red)
               .width('100%')
@@ -5136,16 +5319,21 @@ struct Index {
                 .height(18)
                 .color($r('app.color.text_secondary'));
               Text(this.installPhaseText)
+                .accessibilityRole(AccessibilityRoleType.TEXT)
+                .accessibilityText(this.installPhaseText)
                 .fontSize($r('sys.float.ohos_id_text_size_body3'))
                 .fontColor($r('app.color.text_secondary'))
                 .margin({ left: 8 });
             }
+            .accessibilityRole(AccessibilityRoleType.ROW)
             .width('100%')
             .margin({ top: 12 });
           }
 
           if (this.installResultText.length > 0) {
             Text(this.installResultText)
+              .accessibilityRole(AccessibilityRoleType.TEXT)
+              .accessibilityText(this.installResultText)
               .fontSize($r('sys.float.ohos_id_text_size_body2'))
               .fontColor(Color.White)
               .width('100%')
@@ -5156,6 +5344,7 @@ struct Index {
               .backgroundColor(this.installResultOk ? '#34C759' : Color.Red);
           }
         }
+        .accessibilityRole(AccessibilityRoleType.COLUMN)
         .width('100%')
         .alignItems(HorizontalAlign.Start);
       }
@@ -5164,6 +5353,7 @@ struct Index {
       .scrollBar(BarState.Auto)
       .align(Alignment.TopStart);
     }
+    .accessibilityRole(AccessibilityRoleType.COLUMN)
     .width('100%')
     .height('100%')
     .padding({ left: 16, right: 16, top: 16 })
@@ -5177,26 +5367,60 @@ struct Index {
       // 挂 20 会让主标题缩一号、与页面顶栏标题（18fp）拉不开差距，主页的层级感变弱。
       // 用户选择保持现在的大小。
       Text('HDC Toolbox')
+        .accessibilityRole(AccessibilityRoleType.TEXT)
         .fontSize(22)
         .fontWeight(FontWeight.Bold)
         .fontColor($r('app.color.text_primary'))
         .width('100%')
         .margin({ bottom: 4 });
       Text(`${this.status} · ${this.keyState}`)
+        .accessibilityRole(AccessibilityRoleType.TEXT)
         .fontSize($r('sys.float.ohos_id_text_size_body3'))
         .fontColor($r('app.color.text_secondary'))
         .width('100%')
         .margin({ bottom: 12 });
 
-      this.fieldRow({ label: 'Host', value: this.host, onChange: (v: string) => { this.host = v; this.persistConnectionFields(); }, enabled: !this.connected, inputType: InputType.Normal });
-      this.fieldRow({ label: 'Port', value: this.port, onChange: (v: string) => { this.port = v; this.persistConnectionFields(); }, enabled: !this.connected, inputType: InputType.Number });
+      this.fieldRow({
+        label: 'Host',
+        value: this.host,
+        onChange: (v: string) => {
+          this.host = v;
+          this.persistConnectionFields();
+        },
+        enabled: !this.connected,
+        inputType: InputType.Normal
+      });
+      this.fieldRow({
+        label: 'Port',
+        value: this.port,
+        onChange: (v: string) => {
+          this.port = v;
+          this.persistConnectionFields();
+        },
+        enabled: !this.connected,
+        inputType: InputType.Number
+      });
       // 协议版本是约定值（用户拍板不可编辑）：enabled 与其他行同步（连上变灰），
       // 仅 touchable=false 不获焦。version 状态保持 DEFAULT_VERSION 供 buildOptions。
-      this.fieldRow({ label: 'Version', value: this.version, onChange: (_v: string) => {}, enabled: !this.connected, inputType: InputType.Normal, touchable: false });
-      this.fieldRow({ label: 'HostName', value: this.hostName, onChange: (v: string) => { this.hostName = v; }, enabled: !this.connected, inputType: InputType.Normal });
+      this.fieldRow({
+        label: 'Version',
+        value: this.version,
+        onChange: (_v: string) => {},
+        enabled: !this.connected,
+        inputType: InputType.Normal,
+        touchable: false
+      });
+      this.fieldRow({
+        label: 'HostName',
+        value: this.hostName,
+        onChange: (v: string) => { this.hostName = v; },
+        enabled: !this.connected,
+        inputType: InputType.Normal
+      });
 
       Row() {
         Button(this.connected ? '断开' : '连接')
+          .accessibilityText(this.connected ? '断开' : '连接')
           .layoutWeight(1)
           .enabled(!this.busy)
           .onClick(() => {
@@ -5207,16 +5431,19 @@ struct Index {
             }
           });
         Button('生成密钥')
+          .accessibilityText('生成密钥')
           .layoutWeight(1)
           .margin({ left: 8 })
           .enabled(!this.busy && !this.connected)
           .onClick(() => { this.onGenerateKey(); });
         Button('清除密钥')
+          .accessibilityText('清除密钥')
           .layoutWeight(1)
           .margin({ left: 8 })
           .enabled(!this.busy && !this.connected)
           .onClick(() => { this.onClearKey(); });
       }
+      .accessibilityRole(AccessibilityRoleType.ROW)
       .width('100%')
       .margin({ top: 4, bottom: 12 });
 
@@ -5230,9 +5457,11 @@ struct Index {
           this.featureList();
         }
       }
+      .accessibilityRole(AccessibilityRoleType.COLUMN)
       .layoutWeight(1)
       .width('100%');
     }
+    .accessibilityRole(AccessibilityRoleType.COLUMN)
     .width('100%')
     .height('100%')
     .padding({ left: 16, right: 16, top: 16 });
@@ -5260,6 +5489,7 @@ struct Index {
         this.agentSettingsPage();
       }
     }
+    .accessibilityRole(AccessibilityRoleType.STACK)
     .width('100%')
     .height('100%')
     .backgroundColor($r('app.color.page_background'));

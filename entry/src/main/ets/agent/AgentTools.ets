@@ -9,7 +9,7 @@
  * 只有第一次请求为它付费。
  */
 
-import type { ApiTool } from './AnthropicClient';
+import type { ApiTool, ToolSchema } from './AnthropicClient';
 import { MAX_DRAW_SEGMENTS, supportedKeyNames, WAIT_MAX_MS } from './DeviceControl';
 
 export const TOOL_TODO_WRITE: string = 'todo_write';
@@ -52,18 +52,18 @@ export function isActionTool(name: string): boolean {
   return ACTION_TOOLS.indexOf(name) >= 0;
 }
 
-function emptySchema(): Object {
-  return { type: 'object', properties: {} as Object };
+function emptySchema(): ToolSchema {
+  return { type: 'object', properties: {} };
 }
 
-function indexSchema(what: string): Object {
+function indexSchema(what: string): ToolSchema {
   return {
     type: 'object',
     properties: {
       // 「取自最近一次界面观测」这半句不写在这里。它随 tap / long_press / double_tap
       // 各发一份，而系统提示词里已有一条讲后果的（用旧编号会被拒绝），那条才是有用的。
       index: { type: 'integer', description: `要${what}的元素编号。` }
-    } as Object,
+    },
     required: ['index']
   };
 }
@@ -106,11 +106,11 @@ export function buildTools(includeScreenshot: boolean): ApiTool[] {
                 enum: ['pending', 'active', 'done'],
                 description: 'pending 待办、active 正在做、done 已完成。缺省为 pending。'
               }
-            } as Object,
+            },
             required: ['text']
           }
         }
-      } as Object,
+      },
       required: ['items']
     }
   });
@@ -202,7 +202,7 @@ export function buildTools(includeScreenshot: boolean): ApiTool[] {
           index: { type: 'integer', description: '那个位置属于哪个元素。' },
           x: { type: 'number', description: '画面横向比例。' },
           y: { type: 'number', description: '画面纵向比例。' }
-        } as Object,
+        },
         required: ['index', 'x', 'y']
       }
     });
@@ -248,7 +248,7 @@ export function buildTools(includeScreenshot: boolean): ApiTool[] {
           type: 'integer',
           description: '滚动力度，越大滚得越远。1 大约三分之一屏，缺省 1。要翻很远就填大一点。'
         }
-      } as Object,
+      },
       required: ['index', 'direction']
     }
   });
@@ -262,7 +262,7 @@ export function buildTools(includeScreenshot: boolean): ApiTool[] {
       properties: {
         from_index: { type: 'integer', description: '被拖动的元素编号。' },
         to_index: { type: 'integer', description: '拖到哪个元素的位置上。' }
-      } as Object,
+      },
       required: ['from_index', 'to_index']
     }
   });
@@ -291,10 +291,10 @@ export function buildTools(includeScreenshot: boolean): ApiTool[] {
         strokes: {
           // 格式与比例含义在上面的描述里已经给了例子，schema 里不再重复。
           type: 'array',
-          items: { type: 'string' } as Object,
+          items: { type: 'string' },
           description: '笔画列表。每项是一笔，至少两个点。'
         }
-      } as Object,
+      },
       required: ['index', 'strokes']
     }
   });
@@ -311,7 +311,7 @@ export function buildTools(includeScreenshot: boolean): ApiTool[] {
       properties: {
         index: { type: 'integer', description: '输入框的元素编号。' },
         text: { type: 'string', description: '要输入的文本，支持中文。' }
-      } as Object,
+      },
       required: ['index', 'text']
     }
   });
@@ -337,7 +337,7 @@ export function buildTools(includeScreenshot: boolean): ApiTool[] {
           type: 'integer',
           description: '连按次数，用于连续删除等场景。缺省为 1。'
         }
-      } as Object,
+      },
       required: ['name']
     }
   });
@@ -353,7 +353,7 @@ export function buildTools(includeScreenshot: boolean): ApiTool[] {
       type: 'object',
       properties: {
         app: { type: 'string', description: '应用名字，例如 备忘录。填包名也认。' }
-      } as Object,
+      },
       required: ['app']
     }
   });
@@ -379,7 +379,7 @@ export function buildTools(includeScreenshot: boolean): ApiTool[] {
           type: 'integer',
           description: `等待毫秒数，上限 ${WAIT_MAX_MS}。超过会被截断，截断时结果里会说明。`
         }
-      } as Object,
+      },
       required: ['ms']
     }
   });
@@ -398,7 +398,7 @@ export function buildTools(includeScreenshot: boolean): ApiTool[] {
           type: 'string',
           description: '给用户看的结果说明。做成了什么，或者没做成什么、原因是什么。'
         }
-      } as Object,
+      },
       required: ['summary']
     }
   });

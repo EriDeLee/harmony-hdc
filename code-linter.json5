@@ -15,8 +15,8 @@
     "plugin:@typescript-eslint/recommended",
     "plugin:@performance/recommended",
     "plugin:@security/recommended",
-    "plugin:@correctness/recommended",
-    "plugin:@compatibility/recommended",
+    "plugin:@correctness/all",
+    "plugin:@compatibility/all",
     "plugin:@hw-stylistic/recommended"
   ]
 }

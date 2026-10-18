@@ -7,7 +7,7 @@
 2.0.1 新增「安装 HAP」：从手机上选 .hap 安装包，直接装进所连设备。
 
 - 包名 `com.lee.hdc` · 版本 `2.0.1`
-- HarmonyOS，`compatibleSdkVersion 6.1.0(23)` / `targetSdkVersion 6.1.1(24)`
+- HarmonyOS，`compatibleSdkVersion 6.1.0(23)` / `targetSdkVersion 26.0.0(26)`
 - 仅手机，无第三方依赖
 
 ## 截图
@@ -93,31 +93,31 @@ Host、Port 和系统应用判定缓存会存到 Preferences，下次进来自�
 
 ```
 entry/src/main/ets/
-├─ entryability/EntryAbility.ts     UIAbility：loadContent + 接收「点 .hap 打开」的 want.uri
+├─ entryability/EntryAbility.ets    UIAbility：loadContent + 接收「点 .hap 打开」的 want.uri
 ├─ pages/Index.ets                  全部 UI（主页 + 终端/安装 HAP/清数据/电源/AGENT 五个全屏浮层）
 ├─ agent/
-│  ├─ AgentLoop.ts                  一轮轮的对话循环、工具分发、上下文压缩
-│  ├─ AnthropicClient.ts            SSE 流式解析、thinking 块原样回传、缓存标记
-│  ├─ AgentTools.ts                 16 个工具的声明与系统提示词
-│  ├─ Observer.ts                   界面树转带编号的元素表
-│  ├─ DeviceControl.ts              每个动作对应的 shell 命令、取消与超时
-│  ├─ AgentSession.ts               会话存盘，时间线旁挂只追加的 .timeline
-│  ├─ AgentSettings.ts              端点、key、模型、上下文上限等设置
-│  ├─ KeepAlive.ts                  dataTransfer 长时任务与进度通知
-│  └─ TodoStore.ts                  模型自己写的计划与进度
+│  ├─ AgentLoop.ets                 一轮轮的对话循环、工具分发、上下文压缩
+│  ├─ AnthropicClient.ets           SSE 流式解析、thinking 块原样回传、缓存标记
+│  ├─ AgentTools.ets                16 个工具的声明与系统提示词
+│  ├─ Observer.ets                  界面树转带编号的元素表
+│  ├─ DeviceControl.ets             每个动作对应的 shell 命令、取消与超时
+│  ├─ AgentSession.ets              会话存盘，时间线旁挂只追加的 .timeline
+│  ├─ AgentSettings.ets             端点、key、模型、上下文上限等设置
+│  ├─ KeepAlive.ets                 dataTransfer 长时任务与进度通知
+│  └─ TodoStore.ets                 模型自己写的计划与进度
 └─ hdc/
-   ├─ HdcTypes.ts                   协议常量与类型
-   ├─ Bytes.ts                      ByteReader/ByteWriter、base64、hex、UTF-8
-   ├─ Protocol.ts                   varint、protobuf 字段、TLV、组帧与拆帧
-   ├─ HdcCrypto.ts                  RSA-3072 生成/导入、PSS 签名
-   ├─ HdcKeyStore.ts                密钥 PEM 持久化
-   ├─ HdcSettings.ts                连接参数与系统应用判定缓存
-   ├─ HdcConnection.ts              TCP、握手鉴权状态机、帧路由
-   ├─ HdcShellChannel.ts            交互式 shell 通道
-   ├─ HdcFileChannel.ts             FILE 通道：向所连设备推文件（帧序列真机探针验证）
-   ├─ TerminalEmulator.ts           80 列行式终端模拟：消化 mksh 重画回显的控制码
-   ├─ HdcUnityCommandChannel.ts     一次性命令通道
-   └─ BundleManager.ts              bm 封装：列表、系统应用分类、清数据、装 HAP 三段
+   ├─ HdcTypes.ets                  协议常量与类型
+   ├─ Bytes.ets                     ByteReader/ByteWriter、base64、hex、UTF-8
+   ├─ Protocol.ets                  varint、protobuf 字段、TLV、组帧与拆帧
+   ├─ HdcCrypto.ets                 RSA-3072 生成/导入、PSS 签名
+   ├─ HdcKeyStore.ets               密钥 PEM 持久化
+   ├─ HdcSettings.ets               连接参数与系统应用判定缓存
+   ├─ HdcConnection.ets             TCP、握手鉴权状态机、帧路由
+   ├─ HdcShellChannel.ets           交互式 shell 通道
+   ├─ HdcFileChannel.ets            FILE 通道：向所连设备推文件（帧序列真机探针验证）
+   ├─ TerminalEmulator.ets          80 列行式终端模拟：消化 mksh 重画回显的控制码
+   ├─ HdcUnityCommandChannel.ets    一次性命令通道
+   └─ BundleManager.ets             bm 封装：列表、系统应用分类、清数据、装 HAP 三段
 ```
 
 ## 已知限制

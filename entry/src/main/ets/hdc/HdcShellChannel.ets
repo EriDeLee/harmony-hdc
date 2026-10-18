@@ -20,7 +20,7 @@ const CTRL_C: Uint8Array = new Uint8Array([0x03]);
 
 export class HdcShellChannel {
   readonly channelId: number;
-  private readonly send: ShellSender;
+  private readonly sender: ShellSender;
   private readonly onOutput: ShellOutputSink;
   private readonly decoder: util.TextDecoder = util.TextDecoder.create('utf-8', { fatal: false, ignoreBOM: true });
   private started: boolean = false;
@@ -28,8 +28,12 @@ export class HdcShellChannel {
 
   constructor(channelId: number, send: ShellSender, onOutput: ShellOutputSink) {
     this.channelId = channelId;
-    this.send = send;
+    this.sender = send;
     this.onOutput = onOutput;
+  }
+
+  private send(payload: Uint8Array, commandFlag: number, channelId: number): Promise<void> {
+    return this.sender(payload, commandFlag, channelId);
   }
 
   /** 拉起交互式 shell。 */

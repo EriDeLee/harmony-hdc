@@ -13,6 +13,7 @@ import {
   tryParseFrame
 } from './Protocol';
 import { bytesToUtf8, concatBytes, utf8ToBytes } from './Bytes';
+import type { ParseFrameResult } from './Protocol';
 import { signToken } from './HdcCrypto';
 import type { HdcKeyPair } from './HdcCrypto';
 import { HdcShellChannel } from './HdcShellChannel';
@@ -219,7 +220,12 @@ export class HdcConnection {
 
     const address: socket.NetAddress = { address: options.host, port: options.port };
     const connectOptions: socket.TCPConnectOptions = { address, timeout: options.timeoutMs };
-    await tcp.connect(connectOptions);
+    try {
+      await tcp.connect(connectOptions);
+    } catch (err) {
+      await this.close();
+      throw new Error(`TCP 连接失败: ${(err as BusinessError).message}`);
+    }
     this.log(`[tcp] connected ${options.host}:${options.port}`);
   }
 
@@ -306,7 +312,11 @@ export class HdcConnection {
     }
     const frame = buildFrame(payload, channelId, commandFlag);
     const sendOptions: socket.TCPSendOptions = { data: toArrayBuffer(frame) };
-    await this.tcp.send(sendOptions);
+    try {
+      await this.tcp.send(sendOptions);
+    } catch (err) {
+      throw new Error(`发送 HDC 数据失败: ${(err as BusinessError).message}`);
+    }
   }
 
   async close(): Promise<void> {
@@ -329,7 +339,7 @@ export class HdcConnection {
   private onBytes(chunk: Uint8Array): void {
     this.recvBuf = concatBytes([this.recvBuf, chunk]);
     while (true) {
-      let parsed: ReturnType<typeof tryParseFrame>;
+      let parsed: ParseFrameResult | null;
       try {
         parsed = tryParseFrame(this.recvBuf);
       } catch (err) {
@@ -417,7 +427,8 @@ export class HdcConnection {
     }
   }
 
-  private singleShellChannel(): HdcShellChannel | undefined {    if (this.shellChannels.size !== 1) {
+  private singleShellChannel(): HdcShellChannel | undefined {
+    if (this.shellChannels.size !== 1) {
       return undefined;
     }
     for (const channel of this.shellChannels.values()) {

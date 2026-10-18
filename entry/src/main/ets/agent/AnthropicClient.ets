@@ -121,10 +121,40 @@ export interface ApiMessage {
   content: ApiBlock[];
 }
 
+/** JSON Schema 的工具参数子集，递归描述对象属性和数组元素。 */
+export interface ToolSchema {
+  type: string;
+  description?: string;
+  enum?: string[];
+  properties?: ToolSchemaProperties;
+  required?: string[];
+  items?: ToolSchema;
+}
+
+/** 应用提供的工具参数名；保留对象形态以匹配 JSON Schema 协议。 */
+export interface ToolSchemaProperties {
+  index?: ToolSchema;
+  items?: ToolSchema;
+  text?: ToolSchema;
+  status?: ToolSchema;
+  x?: ToolSchema;
+  y?: ToolSchema;
+  direction?: ToolSchema;
+  amount?: ToolSchema;
+  from_index?: ToolSchema;
+  to_index?: ToolSchema;
+  strokes?: ToolSchema;
+  name?: ToolSchema;
+  repeat?: ToolSchema;
+  app?: ToolSchema;
+  ms?: ToolSchema;
+  summary?: ToolSchema;
+}
+
 export interface ApiTool {
   name: string;
   description: string;
-  input_schema: Object;
+  input_schema: ToolSchema;
   cache_control?: CacheControl;
 }
 
@@ -434,12 +464,12 @@ export function assistantTurnToBlocks(turn: AssistantTurn): ApiBlock[] {
     } else if (part.kind === 'redacted_thinking') {
       blocks.push({ type: 'redacted_thinking', data: part.redactedData });
     } else if (part.kind === 'tool_use') {
-      let input: Object = {};
+      let input: Object = new Object();
       if (part.toolInputJson.length > 0) {
         try {
           input = JSON.parse(part.toolInputJson) as Object;
         } catch (err) {
-          input = {};
+          input = new Object();
         }
       }
       blocks.push({ type: 'tool_use', id: part.toolId, name: part.toolName, input });
@@ -453,7 +483,7 @@ export function assistantTurnToBlocks(turn: AssistantTurn): ApiBlock[] {
 /** 解析某个 tool_use 的参数；失败返回 null，由调用方回报参数错误。 */
 export function parseToolInput(part: ContentPart): Object | null {
   if (part.toolInputJson.length === 0) {
-    return {};
+    return new Object();
   }
   try {
     return JSON.parse(part.toolInputJson) as Object;
